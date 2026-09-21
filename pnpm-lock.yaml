@@ -41,21 +41,33 @@ importers:
       '@blakid/control-plane':
         specifier: workspace:*
         version: link:../../packages/control-plane
+      '@blakid/federation':
+        specifier: workspace:*
+        version: link:../../packages/federation
       '@blakid/identity':
         specifier: workspace:*
         version: link:../../packages/identity
       '@blakid/integrations':
         specifier: workspace:*
         version: link:../../packages/integrations
+      '@blakid/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
       '@blakid/provisioning':
         specifier: workspace:*
         version: link:../../packages/provisioning
+      '@blakid/scim':
+        specifier: workspace:*
+        version: link:../../packages/scim
       '@blakid/support-access':
         specifier: workspace:*
         version: link:../../packages/support-access
       '@blakid/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@blakid/webhooks':
+        specifier: workspace:*
+        version: link:../../packages/webhooks
       jose:
         specifier: ^6.1.0
         version: 6.2.12
@@ -137,12 +149,27 @@ importers:
       '@blakid/config':
         specifier: workspace:*
         version: link:../config
+      '@blakid/federation':
+        specifier: workspace:*
+        version: link:../federation
       '@blakid/identity':
         specifier: workspace:*
         version: link:../identity
+      '@blakid/integrations':
+        specifier: workspace:*
+        version: link:../integrations
+      '@blakid/mcp':
+        specifier: workspace:*
+        version: link:../mcp
+      '@blakid/scim':
+        specifier: workspace:*
+        version: link:../scim
       '@blakid/support-access':
         specifier: workspace:*
         version: link:../support-access
+      '@blakid/webhooks':
+        specifier: workspace:*
+        version: link:../webhooks
 
   packages/database:
     dependencies:
@@ -157,9 +184,17 @@ importers:
         specifier: ^0.31.4
         version: 0.31.11
 
+  packages/federation:
+    dependencies:
+      '@blakid/identity':
+        specifier: workspace:*
+        version: link:../identity
+
   packages/identity: {}
 
   packages/integrations: {}
+
+  packages/mcp: {}
 
   packages/provisioning:
     dependencies:
@@ -173,6 +208,12 @@ importers:
         specifier: workspace:*
         version: link:../control-plane
 
+  packages/scim:
+    dependencies:
+      '@blakid/identity':
+        specifier: workspace:*
+        version: link:../identity
+
   packages/support-access:
     dependencies:
       '@blakid/authz':
@@ -180,6 +221,8 @@ importers:
         version: link:../authz
 
   packages/ui: {}
+
+  packages/webhooks: {}
 
 packages:
 

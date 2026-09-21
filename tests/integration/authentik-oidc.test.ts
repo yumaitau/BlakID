@@ -97,6 +97,15 @@ describe.skipIf(!docker.ok)("authentik dedicated stacks", () => {
     const liveFlow = await requireEnrolmentFlow(recA.url, recA.token);
     expect(liveFlow.slug).toBe(PASSKEY_ENROL_SLUG);
 
+    const saml = await app.createSamlApplication(ownerA, a.organisation.id, {
+      name: "Microsoft 365",
+      slug: "m365",
+      acsUrl: "https://login.microsoftonline.com/example/saml2",
+    });
+    expect(saml.protocol).toBe("saml");
+    const metadata = saml.metadataXml || (await fetch(saml.metadataUrl).then((r) => r.text()));
+    expect(metadata).toContain("EntityDescriptor");
+
     const oidc = await app.createOidcApplication(ownerA, a.organisation.id, {
       name: "RangerOS",
       slug: "rangeros",

@@ -36,3 +36,58 @@ export const CATALOGUE: CatalogueItem[] = [
 export function getCatalogueItem(id: string): CatalogueItem | undefined {
   return CATALOGUE.find((item) => item.id === id);
 }
+
+export type CatalogueApplyInput = {
+  catalogueId: string;
+  protocol: CatalogueProtocol;
+  name?: string;
+  slug?: string;
+  redirectUris?: string[];
+  logoutUri?: string;
+  acsUrl?: string;
+  audience?: string;
+  scimUrl?: string;
+  scimToken?: string;
+};
+
+export function catalogueApplyPlan(input: CatalogueApplyInput): {
+  item: CatalogueItem;
+  protocol: CatalogueProtocol;
+  name: string;
+  slug: string;
+  createOidc: boolean;
+  createSaml: boolean;
+  createScim: boolean;
+  ldapLegacy: boolean;
+} {
+  const item = getCatalogueItem(input.catalogueId);
+  if (!item) throw new Error(`Unknown catalogue item ${input.catalogueId}`);
+  if (input.protocol === "ldap") {
+    return {
+      item,
+      protocol: "ldap",
+      name: input.name ?? item.name,
+      slug: input.slug ?? item.id,
+      createOidc: false,
+      createSaml: false,
+      createScim: false,
+      ldapLegacy: true,
+    };
+  }
+  if (input.protocol === "oidc" && !item.authentication.includes("oidc")) {
+    throw new Error(`${item.name} does not list OIDC`);
+  }
+  if (input.protocol === "saml" && !item.authentication.includes("saml")) {
+    throw new Error(`${item.name} does not list SAML`);
+  }
+  return {
+    item,
+    protocol: input.protocol,
+    name: input.name ?? item.name,
+    slug: input.slug ?? item.id,
+    createOidc: input.protocol === "oidc",
+    createSaml: input.protocol === "saml",
+    createScim: Boolean(input.scimUrl && item.provisioning.includes("scim")),
+    ldapLegacy: false,
+  };
+}

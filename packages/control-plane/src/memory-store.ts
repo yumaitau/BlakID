@@ -1,10 +1,14 @@
 import type { AuditEvent } from "@blakid/audit";
+import type { TrustPolicy } from "@blakid/federation";
 import type { SupportAccessRequest } from "@blakid/support-access";
+import type { WebhookDelivery, WebhookEndpoint } from "@blakid/webhooks";
 import type {
   AccessRequest,
+  AgentAction,
   BlakIDStore,
   ControlPlaneMember,
   Deployment,
+  InboundScimCredential,
   Invitation,
   Organisation,
 } from "./types.ts";
@@ -17,6 +21,11 @@ export class MemoryStore implements BlakIDStore {
   support = new Map<string, SupportAccessRequest>();
   accessRequests = new Map<string, AccessRequest>();
   audit: AuditEvent[] = [];
+  webhooks = new Map<string, WebhookEndpoint>();
+  deliveries = new Map<string, WebhookDelivery>();
+  trusts = new Map<string, TrustPolicy>();
+  agentActions = new Map<string, AgentAction>();
+  scimCredentials = new Map<string, InboundScimCredential>();
 
   async insertOrganisation(org: Organisation) {
     if ([...this.organisations.values()].some((o) => o.slug === org.slug)) {
@@ -62,6 +71,10 @@ export class MemoryStore implements BlakIDStore {
   async listMembers(organisationId: string) {
     return [...this.members.values()].filter((m) => m.organisationId === organisationId);
   }
+  async updateMember(member: ControlPlaneMember) {
+    this.members.set(member.id, member);
+    return member;
+  }
   async insertInvitation(invitation: Invitation) {
     this.invitations.set(invitation.id, invitation);
     return invitation;
@@ -103,5 +116,62 @@ export class MemoryStore implements BlakIDStore {
   }
   async listAudit(organisationId: string) {
     return this.audit.filter((e) => e.organisation_id === organisationId);
+  }
+  async insertWebhook(endpoint: WebhookEndpoint) {
+    this.webhooks.set(endpoint.id, endpoint);
+    return endpoint;
+  }
+  async listWebhooks(organisationId: string) {
+    return [...this.webhooks.values()].filter((w) => w.organisationId === organisationId);
+  }
+  async insertDelivery(delivery: WebhookDelivery) {
+    this.deliveries.set(delivery.id, delivery);
+    return delivery;
+  }
+  async listDeliveries(organisationId: string) {
+    const hooks = new Set((await this.listWebhooks(organisationId)).map((w) => w.id));
+    return [...this.deliveries.values()].filter((d) => hooks.has(d.webhookId));
+  }
+  async updateDelivery(delivery: WebhookDelivery) {
+    this.deliveries.set(delivery.id, delivery);
+    return delivery;
+  }
+  async insertTrust(policy: TrustPolicy) {
+    this.trusts.set(policy.id, policy);
+    return policy;
+  }
+  async listTrusts(organisationId: string) {
+    return [...this.trusts.values()].filter((t) => t.organisationId === organisationId);
+  }
+  async getTrust(organisationId: string, peerOrganisationId: string) {
+    return (
+      [...this.trusts.values()].find(
+        (t) => t.organisationId === organisationId && t.peerOrganisationId === peerOrganisationId,
+      ) ?? null
+    );
+  }
+  async insertAgentAction(action: AgentAction) {
+    this.agentActions.set(action.id, action);
+    return action;
+  }
+  async getAgentAction(id: string) {
+    return this.agentActions.get(id) ?? null;
+  }
+  async listAgentActions(organisationId: string) {
+    return [...this.agentActions.values()].filter((a) => a.organisationId === organisationId);
+  }
+  async updateAgentAction(action: AgentAction) {
+    this.agentActions.set(action.id, action);
+    return action;
+  }
+  async insertScimCredential(credential: InboundScimCredential) {
+    this.scimCredentials.set(credential.id, credential);
+    return credential;
+  }
+  async getScimCredentialByTokenHash(hash: string) {
+    return [...this.scimCredentials.values()].find((c) => c.tokenHash === hash) ?? null;
+  }
+  async listScimCredentials(organisationId: string) {
+    return [...this.scimCredentials.values()].filter((c) => c.organisationId === organisationId);
   }
 }

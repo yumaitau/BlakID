@@ -6,10 +6,18 @@ import {
   type AuthentikGroup,
   type AuthentikSession,
   type AuthentikUser,
+  type CreateFederationSourceInput,
   type CreateOidcAppInput,
+  type CreateSamlAppInput,
+  type CreateScimProviderInput,
   type CreateUserInput,
+  type FederationSource,
+  type FederationSourceType,
   type OidcApplication,
   type OidcDiscovery,
+  type SamlApplication,
+  type ScimProvider,
+  type UserAuthenticators,
 } from "./types.ts";
 
 type Json = Record<string, unknown>;
@@ -215,7 +223,7 @@ export class HttpAuthentikClient implements AuthentikClient {
     }
   }
 
-  async createOidcApplication(input: CreateOidcAppInput): Promise<OidcApplication> {
+  private async locateFlows(): Promise<{ authorization: Json; invalidation: Json; authentication: Json | null; enrollment: Json | null }> {
     const flows = (await this.request("/api/v3/flows/instances/?page_size=100")) as Json;
     const flowList = (flows.results as Json[] | undefined) ?? [];
     const authorization =
@@ -229,6 +237,26 @@ export class HttpAuthentikClient implements AuthentikClient {
     if (!authorization || !invalidation) {
       throw new AuthentikApiError(500, "Could not locate authentik authorization/invalidation flows");
     }
+    const authentication =
+      flowList.find((f) => asString(f.designation) === "authentication") ??
+      flowList.find((f) => asString(f.slug).includes("authentication")) ??
+      null;
+    const enrollment =
+      flowList.find((f) => asString(f.designation) === "enrollment") ??
+      flowList.find((f) => asString(f.slug).includes("enrollment")) ??
+      null;
+    return { authorization, invalidation, authentication, enrollment };
+  }
+
+  private async signingKeyPk(): Promise<string | null> {
+    const certs = (await this.request("/api/v3/crypto/certificatekeypairs/?page_size=50")) as Json;
+    const certList = (certs.results as Json[] | undefined) ?? [];
+    const signingKey = certList.find((c) => asString(c.name).toLowerCase().includes("authentik")) ?? certList[0];
+    return signingKey?.pk ? String(signingKey.pk) : null;
+  }
+
+  async createOidcApplication(input: CreateOidcAppInput): Promise<OidcApplication> {
+    const { authorization, invalidation } = await this.locateFlows();
 
     const scopes = (await this.request("/api/v3/propertymappings/provider/scope/?page_size=100")) as Json;
     const scopeList = (scopes.results as Json[] | undefined) ?? [];
@@ -237,9 +265,7 @@ export class HttpAuthentikClient implements AuthentikClient {
       .filter((s) => wanted.has(asString(s.scope_name)))
       .map((s) => s.pk);
 
-    const certs = (await this.request("/api/v3/crypto/certificatekeypairs/?page_size=50")) as Json;
-    const certList = (certs.results as Json[] | undefined) ?? [];
-    const signingKey = certList.find((c) => asString(c.name).toLowerCase().includes("authentik")) ?? certList[0];
+    const signingKey = await this.signingKeyPk();
 
     const provider = (await this.request("/api/v3/providers/oauth2/", {
       method: "POST",
@@ -257,7 +283,7 @@ export class HttpAuthentikClient implements AuthentikClient {
         access_token_validity: "minutes=10",
         refresh_token_validity: "hours=24",
         property_mappings: propertyMappings,
-        ...(signingKey?.pk ? { signing_key: signingKey.pk } : {}),
+        ...(signingKey ? { signing_key: signingKey } : {}),
       }),
     })) as Json;
 
@@ -321,6 +347,222 @@ export class HttpAuthentikClient implements AuthentikClient {
     return (await response.json()) as { keys: Record<string, unknown>[] };
   }
 
+  async createSamlApplication(input: CreateSamlAppInput): Promise<SamlApplication> {
+    const { authorization, invalidation } = await this.locateFlows();
+    const signing = await this.signingKeyPk();
+    let acsUrl = input.acsUrl;
+    if (input.metadataXml) {
+      const acs = input.metadataXml.match(/AssertionConsumerService[^>]*Location="([^"]+)"/i);
+      if (acs) acsUrl = acs[1];
+    }
+    const provider = (await this.request("/api/v3/providers/saml/", {
+      method: "POST",
+      body: JSON.stringify({
+        name: `${input.name} SAML`,
+        authorization_flow: authorization.pk,
+        invalidation_flow: invalidation.pk,
+        acs_url: acsUrl,
+        issuer: input.entityId ?? input.slug,
+        audience: input.audience ?? acsUrl,
+        sp_binding: "post",
+        sign_assertion: true,
+        sign_response: true,
+        ...(signing ? { signing_kp: signing } : {}),
+      }),
+    })) as Json;
+    const application = (await this.request("/api/v3/core/applications/", {
+      method: "POST",
+      body: JSON.stringify({
+        name: input.name,
+        slug: input.slug,
+        provider: provider.pk,
+      }),
+    })) as Json;
+    const app = this.composeSaml(input, provider, application, acsUrl);
+    app.metadataXml = await this.fetchSamlMetadata(String(provider.pk), app.slug);
+    app.metadataUrl = `${this.baseUrl.replace(/\/$/, "")}/application/saml/${app.slug}/metadata/`;
+    return app;
+  }
+
+  async getSamlApplication(id: string): Promise<SamlApplication> {
+    const application = (await this.request(`/api/v3/core/applications/${id}/`)) as Json;
+    const provider = (await this.request(`/api/v3/providers/saml/${application.provider}/`)) as Json;
+    const app = this.composeSaml(
+      {
+        name: asString(application.name),
+        slug: asString(application.slug),
+        acsUrl: asString(provider.acs_url),
+        audience: asString(provider.audience),
+        entityId: asString(provider.issuer),
+      },
+      provider,
+      application,
+      asString(provider.acs_url),
+    );
+    app.metadataXml = await this.fetchSamlMetadata(String(provider.pk), app.slug);
+    return app;
+  }
+
+  async listSamlApplications(): Promise<SamlApplication[]> {
+    const raw = (await this.request("/api/v3/core/applications/?page_size=200")) as Json;
+    const results = (raw.results as Json[] | undefined) ?? [];
+    const apps: SamlApplication[] = [];
+    for (const application of results) {
+      if (!application.provider) continue;
+      try {
+        apps.push(await this.getSamlApplication(asString(application.pk ?? application.slug)));
+      } catch {
+        // skip non-SAML providers
+      }
+    }
+    return apps;
+  }
+
+  async createFederationSource(input: CreateFederationSourceInput): Promise<FederationSource> {
+    const flows = await this.locateFlows();
+    const providerType =
+      input.type === "entra" ? "azuread" : input.type === "google" ? "google" : input.type === "oidc" ? "openidconnect" : null;
+    if (input.type === "saml") {
+      const created = (await this.request("/api/v3/sources/saml/", {
+        method: "POST",
+        body: JSON.stringify({
+          name: input.name,
+          slug: input.slug,
+          sso_url: input.ssoUrl,
+          issuer: input.entityId ?? input.slug,
+          pre_authentication_flow: flows.authentication?.pk,
+        }),
+      })) as Json;
+      return this.mapSource(created, "saml");
+    }
+    const created = (await this.request("/api/v3/sources/oauth/", {
+      method: "POST",
+      body: JSON.stringify({
+        name: input.name,
+        slug: input.slug,
+        provider_type: providerType,
+        consumer_key: input.clientId,
+        consumer_secret: input.clientSecret,
+        oidc_well_known_url: input.wellKnownUrl,
+        authentication_flow: flows.authentication?.pk,
+        enrollment_flow: flows.enrollment?.pk,
+        user_matching_mode: "email_link",
+        enabled: true,
+      }),
+    })) as Json;
+    return this.mapSource(created, input.type);
+  }
+
+  async listFederationSources(): Promise<FederationSource[]> {
+    const raw = (await this.request("/api/v3/sources/all/?page_size=100").catch(() => ({ results: [] }))) as Json;
+    const results = (raw.results as Json[] | undefined) ?? [];
+    return results.map((row) => this.mapSource(row, this.guessSourceType(row)));
+  }
+
+  async createScimProvider(input: CreateScimProviderInput): Promise<ScimProvider> {
+    const created = (await this.request("/api/v3/providers/scim/", {
+      method: "POST",
+      body: JSON.stringify({
+        name: input.name,
+        url: input.url,
+        token: input.token,
+        auth_mode: "token",
+      }),
+    })) as Json;
+    await this.request("/api/v3/core/applications/", {
+      method: "POST",
+      body: JSON.stringify({
+        name: input.name,
+        slug: input.slug,
+        provider: created.pk,
+      }),
+    }).catch(() => null);
+    return {
+      id: String(created.pk ?? input.slug),
+      name: input.name,
+      slug: input.slug,
+      url: input.url,
+      direction: "outbound",
+    };
+  }
+
+  async listScimProviders(): Promise<ScimProvider[]> {
+    const raw = (await this.request("/api/v3/providers/scim/?page_size=100").catch(() => ({ results: [] }))) as Json;
+    const results = (raw.results as Json[] | undefined) ?? [];
+    return results.map((row) => ({
+      id: String(row.pk ?? row.name),
+      name: asString(row.name),
+      slug: asString(row.name).toLowerCase().replace(/\s+/g, "-"),
+      url: asString(row.url),
+      direction: "outbound" as const,
+    }));
+  }
+
+  async listUserAuthenticators(userId: string): Promise<UserAuthenticators> {
+    const count = async (path: string) => {
+      const raw = (await this.request(`${path}?user=${encodeURIComponent(userId)}&page_size=100`).catch(() => ({
+        results: [],
+      }))) as Json;
+      return ((raw.results as Json[] | undefined) ?? []).length;
+    };
+    const webauthn =
+      (await count("/api/v3/authenticators/admin/webauthn/")) || (await count("/api/v3/authenticators/webauthn/"));
+    const totp = (await count("/api/v3/authenticators/admin/totp/")) || (await count("/api/v3/authenticators/totp/"));
+    return { userId, webauthn, totp };
+  }
+
+  private async fetchSamlMetadata(providerPk: string, slug: string): Promise<string> {
+    const origin = this.baseUrl.replace(/\/$/, "");
+    const urls = [
+      `${origin}/api/v3/providers/saml/${providerPk}/metadata/`,
+      `${origin}/application/saml/${slug}/metadata/`,
+    ];
+    for (const url of urls) {
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${this.token}` } });
+      if (response.ok) return await response.text();
+    }
+    return "";
+  }
+
+  private composeSaml(input: CreateSamlAppInput, provider: Json, application: Json, acsUrl: string): SamlApplication {
+    const slug = asString(application.slug, input.slug);
+    const origin = this.baseUrl.replace(/\/$/, "");
+    const entityId = asString(provider.issuer, input.entityId ?? `${origin}/application/saml/${slug}/`);
+    return {
+      id: String(application.pk ?? slug),
+      name: asString(application.name, input.name),
+      slug,
+      protocol: "saml",
+      acsUrl,
+      audience: asString(provider.audience, input.audience ?? acsUrl),
+      entityId,
+      metadataUrl: `${origin}/api/v3/providers/saml/${provider.pk}/metadata/`,
+      metadataXml: "",
+      nameId: input.nameId ?? "email",
+    };
+  }
+
+  private mapSource(raw: Json, type: FederationSourceType): FederationSource {
+    return {
+      id: String(raw.pk ?? raw.slug),
+      name: asString(raw.name),
+      slug: asString(raw.slug),
+      type,
+      clientId: asString(raw.consumer_key) || null,
+      wellKnownUrl: asString(raw.oidc_well_known_url) || null,
+      ssoUrl: asString(raw.sso_url) || null,
+      entityId: asString(raw.issuer) || null,
+    };
+  }
+
+  private guessSourceType(raw: Json): FederationSourceType {
+    const provider = asString(raw.provider_type).toLowerCase();
+    if (provider.includes("azure") || provider.includes("entra")) return "entra";
+    if (provider.includes("google")) return "google";
+    if (asString(raw.sso_url) || asString(raw.component).includes("saml")) return "saml";
+    return "oidc";
+  }
+
   private redirectsFrom(provider: Json): string[] {
     const uris = provider.redirect_uris;
     if (Array.isArray(uris)) {
@@ -370,6 +612,7 @@ export class HttpAuthentikClient implements AuthentikClient {
         : [],
       attributes,
       createdAt: asString(raw.date_joined, new Date().toISOString()),
+      lastLoginAt: asString(raw.last_login) || null,
     };
   }
 }

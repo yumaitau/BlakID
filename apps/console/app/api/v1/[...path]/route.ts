@@ -139,13 +139,70 @@ async function handle(request: Request, params: Params) {
     if (resource === "applications" && request.method === "POST") {
       const body = z
         .object({
+          protocol: z.enum(["oidc", "saml", "ldap"]).optional(),
+          catalogueId: z.string().optional(),
           name: z.string(),
           slug: z.string(),
-          redirectUris: z.array(z.string()).min(1),
+          redirectUris: z.array(z.string()).optional(),
           logoutUri: z.string().optional(),
+          acsUrl: z.string().optional(),
+          audience: z.string().optional(),
+          metadataXml: z.string().optional(),
+          scimUrl: z.string().optional(),
+          scimToken: z.string().optional(),
         })
         .parse(await request.json());
-      return Response.json(await app.createOidcApplication(principal!, organisationId!, body, ctx), { status: 201 });
+      if (body.catalogueId) {
+        return Response.json(
+          await app.applyCatalogue(
+            principal!,
+            organisationId!,
+            {
+              catalogueId: body.catalogueId,
+              protocol: body.protocol === "saml" ? "saml" : body.protocol === "ldap" ? "ldap" : "oidc",
+              name: body.name,
+              slug: body.slug,
+              redirectUris: body.redirectUris,
+              logoutUri: body.logoutUri,
+              acsUrl: body.acsUrl,
+              audience: body.audience,
+              scimUrl: body.scimUrl,
+              scimToken: body.scimToken,
+            },
+            ctx,
+          ),
+          { status: 201 },
+        );
+      }
+      if (body.protocol === "saml") {
+        if (!body.acsUrl) return Response.json({ error: "acsUrl required" }, { status: 400 });
+        return Response.json(
+          await app.createSamlApplication(
+            principal!,
+            organisationId!,
+            { name: body.name, slug: body.slug, acsUrl: body.acsUrl, audience: body.audience, metadataXml: body.metadataXml },
+            ctx,
+          ),
+          { status: 201 },
+        );
+      }
+      if (body.protocol === "ldap") {
+        return Response.json({ error: "LDAP is a legacy integration. Prefer OpenID Connect or SAML." }, { status: 400 });
+      }
+      return Response.json(
+        await app.createOidcApplication(
+          principal!,
+          organisationId!,
+          {
+            name: body.name,
+            slug: body.slug,
+            redirectUris: body.redirectUris ?? [],
+            logoutUri: body.logoutUri,
+          },
+          ctx,
+        ),
+        { status: 201 },
+      );
     }
     if (resource === "applications" && id && extra === "discovery" && request.method === "GET") {
       const application = await app.getApplication(principal!, organisationId!, id);
@@ -186,6 +243,126 @@ async function handle(request: Request, params: Params) {
 
     if (resource === "service-accounts" && request.method === "GET") {
       return Response.json(await app.listServiceAccounts(principal!, organisationId!));
+    }
+    if (resource === "service-accounts" && request.method === "POST") {
+      const body = z
+        .object({
+          kind: z.enum(["service_account", "machine", "api_client", "workload", "automation_agent", "ai_agent"]),
+          email: z.string().email(),
+          name: z.string(),
+          ownerId: z.string(),
+          purpose: z.string(),
+          expiresAt: z.string().nullable().optional(),
+          permittedApplications: z.array(z.string()).optional(),
+          modelProvider: z.string().nullable().optional(),
+        })
+        .parse(await request.json());
+      return Response.json(await app.createServiceIdentity(principal!, organisationId!, body, ctx), { status: 201 });
+    }
+
+    if (resource === "federation" && !id && request.method === "GET") {
+      return Response.json(await app.listFederationSources(principal!, organisationId!));
+    }
+    if (resource === "federation" && request.method === "POST" && !id) {
+      const body = z
+        .object({
+          name: z.string(),
+          slug: z.string(),
+          type: z.enum(["entra", "google", "oidc", "saml"]),
+          clientId: z.string().optional(),
+          clientSecret: z.string().optional(),
+          wellKnownUrl: z.string().optional(),
+          ssoUrl: z.string().optional(),
+          entityId: z.string().optional(),
+          metadataXml: z.string().optional(),
+        })
+        .parse(await request.json());
+      return Response.json(await app.createFederationSource(principal!, organisationId!, body, ctx), { status: 201 });
+    }
+    if (resource === "federation" && id === "trusts" && request.method === "GET") {
+      return Response.json(await app.listTrusts(principal!, organisationId!));
+    }
+    if (resource === "federation" && id === "trusts" && request.method === "POST") {
+      const body = z
+        .object({
+          peerOrganisationId: z.string(),
+          peerName: z.string(),
+          acceptAttributes: z.array(z.string()),
+          rejectAttributes: z.array(z.string()),
+        })
+        .parse(await request.json());
+      return Response.json(await app.createTrust(principal!, organisationId!, body, ctx), { status: 201 });
+    }
+    if (resource === "federation" && id === "evaluate" && request.method === "POST") {
+      const body = z
+        .object({
+          peerOrganisationId: z.string(),
+          assertions: z.array(
+            z.object({
+              attribute: z.string(),
+              value: z.unknown(),
+              issuer: z.string(),
+              issued_at: z.string(),
+              expires_at: z.string().nullable(),
+              assurance: z.enum(["organisation_verified", "self_asserted", "federated"]),
+            }),
+          ),
+        })
+        .parse(await request.json());
+      return Response.json(
+        await app.evaluateFederatedAssertions(principal!, organisationId!, body.peerOrganisationId, body.assertions),
+      );
+    }
+
+    if (resource === "security" && (id === "dashboard" || id === "findings") && request.method === "GET") {
+      return Response.json(await app.securityDashboard(principal!, organisationId!));
+    }
+
+    if (resource === "webhooks" && request.method === "GET" && extra === "deliveries") {
+      return Response.json(await app.listWebhookDeliveries(principal!, organisationId!));
+    }
+    if (resource === "webhooks" && request.method === "GET") {
+      return Response.json(await app.listWebhooks(principal!, organisationId!));
+    }
+    if (resource === "webhooks" && request.method === "POST") {
+      const body = z
+        .object({ url: z.string(), secret: z.string(), events: z.array(z.string()) })
+        .parse(await request.json());
+      return Response.json(
+        await app.createWebhook(principal!, organisationId!, {
+          url: body.url,
+          secret: body.secret,
+          events: body.events as never,
+        }),
+        { status: 201 },
+      );
+    }
+
+    if (resource === "administrators" && request.method === "GET") {
+      return Response.json(await app.listAdministrators(principal!, organisationId!));
+    }
+    if (resource === "administrators" && id && request.method === "POST") {
+      const body = z.object({ role: z.string() }).parse(await request.json());
+      return Response.json(await app.assignAdministrator(principal!, organisationId!, id, body.role as never, ctx));
+    }
+
+    if (resource === "scim" && extra === "token" && request.method === "POST") {
+      return Response.json(await app.createInboundScimToken(principal!, organisationId!), { status: 201 });
+    }
+
+    if (resource === "mcp" && request.method === "POST") {
+      const body = z.object({ tool: z.string(), arguments: z.record(z.string(), z.unknown()).optional() }).parse(await request.json());
+      return Response.json(await app.invokeMcp(principal!, organisationId!, body.tool, body.arguments ?? {}));
+    }
+    if (resource === "agent-actions" && request.method === "GET") {
+      return Response.json(await app.store.listAgentActions(organisationId!));
+    }
+    if (resource === "agent-actions" && id && extra === "decide" && request.method === "POST") {
+      const body = z.object({ decision: z.enum(["approved", "denied"]) }).parse(await request.json());
+      return Response.json(await app.decideAgentAction(principal!, organisationId!, id, body.decision));
+    }
+    if (resource === "agent-actions" && id && extra === "execute" && request.method === "POST") {
+      return Response.json(await app.executeAgentAction(principal!, organisationId!, id));
     }
 
     if (resource === "events" && request.method === "GET") {

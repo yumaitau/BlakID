@@ -12,6 +12,7 @@ export type AuthentikUser = {
   assertions: AttributeAssertion[];
   attributes: Record<string, unknown>;
   createdAt: string;
+  lastLoginAt: string | null;
 };
 
 export type AuthentikGroup = {
@@ -66,6 +67,75 @@ export type CreateOidcAppInput = {
   scopes?: string[];
 };
 
+export type CreateSamlAppInput = {
+  name: string;
+  slug: string;
+  acsUrl: string;
+  audience?: string;
+  entityId?: string;
+  nameId?: "email" | "persistent" | "transient";
+  metadataXml?: string;
+};
+
+export type SamlApplication = {
+  id: string;
+  name: string;
+  slug: string;
+  protocol: "saml";
+  acsUrl: string;
+  audience: string;
+  entityId: string;
+  metadataUrl: string;
+  metadataXml: string;
+  nameId: string;
+};
+
+export type FederationSourceType = "entra" | "google" | "oidc" | "saml";
+
+export type CreateFederationSourceInput = {
+  name: string;
+  slug: string;
+  type: FederationSourceType;
+  clientId?: string;
+  clientSecret?: string;
+  wellKnownUrl?: string;
+  ssoUrl?: string;
+  entityId?: string;
+  metadataXml?: string;
+};
+
+export type FederationSource = {
+  id: string;
+  name: string;
+  slug: string;
+  type: FederationSourceType;
+  clientId: string | null;
+  wellKnownUrl: string | null;
+  ssoUrl: string | null;
+  entityId: string | null;
+};
+
+export type CreateScimProviderInput = {
+  name: string;
+  slug: string;
+  url: string;
+  token: string;
+};
+
+export type ScimProvider = {
+  id: string;
+  name: string;
+  slug: string;
+  url: string;
+  direction: "outbound";
+};
+
+export type UserAuthenticators = {
+  userId: string;
+  webauthn: number;
+  totp: number;
+};
+
 export type OidcDiscovery = {
   issuer: string;
   authorization_endpoint: string;
@@ -107,6 +177,15 @@ export interface AuthentikClient {
   listOidcApplications(): Promise<OidcApplication[]>;
   getOidcDiscovery(slug: string): Promise<OidcDiscovery>;
   getJwks(slug: string): Promise<{ keys: Record<string, unknown>[] }>;
+  createSamlApplication(input: CreateSamlAppInput): Promise<SamlApplication>;
+  getSamlApplication(id: string): Promise<SamlApplication>;
+  listSamlApplications(): Promise<SamlApplication[]>;
+  createFederationSource(input: CreateFederationSourceInput): Promise<FederationSource>;
+  listFederationSources(): Promise<FederationSource[]>;
+  createScimProvider(input: CreateScimProviderInput): Promise<ScimProvider>;
+  listScimProviders(): Promise<ScimProvider[]>;
+  listUserAuthenticators(userId: string): Promise<UserAuthenticators>;
+  registerAuthenticator?(userId: string, type: "webauthn" | "totp"): Promise<void>;
 }
 
 export class AuthentikApiError extends Error {

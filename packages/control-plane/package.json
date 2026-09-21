@@ -11,7 +11,12 @@
     "@blakid/authentik": "workspace:*",
     "@blakid/authz": "workspace:*",
     "@blakid/config": "workspace:*",
+    "@blakid/federation": "workspace:*",
     "@blakid/identity": "workspace:*",
-    "@blakid/support-access": "workspace:*"
+    "@blakid/integrations": "workspace:*",
+    "@blakid/mcp": "workspace:*",
+    "@blakid/scim": "workspace:*",
+    "@blakid/support-access": "workspace:*",
+    "@blakid/webhooks": "workspace:*"
   }
 }

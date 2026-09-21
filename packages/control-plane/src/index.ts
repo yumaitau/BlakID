@@ -3,10 +3,12 @@ export { MemoryStore } from "./memory-store.ts";
 export { MemoryTenantRuntime } from "./memory-runtime.ts";
 export type {
   AccessRequest,
+  AgentAction,
   BackupResult,
   BlakIDStore,
   ControlPlaneMember,
   Deployment,
+  InboundScimCredential,
   Invitation,
   Organisation,
   ProvisionInput,

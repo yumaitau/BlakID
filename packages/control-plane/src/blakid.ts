@@ -1,11 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
 import { ImmutableAuditLog, toCsv, type AuditAction, type AuditEvent } from "@blakid/audit";
-import type { AuthentikUser, OidcApplication } from "@blakid/authentik";
+import type { AuthentikUser, OidcApplication, SamlApplication } from "@blakid/authentik";
 import {
   authorize,
   ForbiddenError,
   type Permission,
   type Principal,
+  type Role,
 } from "@blakid/authz";
 import {
   DEFAULT_REGION,
@@ -15,6 +16,7 @@ import {
   TENANT_HOST_SUFFIX,
   type HostingModel,
 } from "@blakid/config";
+import { evaluateAssertions } from "@blakid/federation";
 import {
   assertNotIndigenousIdentityClaim,
   transition,
@@ -22,6 +24,15 @@ import {
   type IdentityKind,
   type UserState,
 } from "@blakid/identity";
+import { catalogueApplyPlan, type CatalogueApplyInput } from "@blakid/integrations";
+import { mcpTool, writeRequiresApproval } from "@blakid/mcp";
+import { applyScimUser, type ScimOperation, type ScimUserResource } from "@blakid/scim";
+import {
+  AUDIT_TO_WEBHOOK,
+  deliverOnce,
+  type WebhookEndpoint,
+  type WebhookEventName,
+} from "@blakid/webhooks";
 import {
   approveSupport,
   denySupport,
@@ -34,6 +45,7 @@ import {
 } from "@blakid/support-access";
 import type {
   AccessRequest,
+  AgentAction,
   BlakIDStore,
   Organisation,
   ProvisionInput,
@@ -46,6 +58,7 @@ export type BlakIDOptions = {
   runtime: TenantRuntime;
   ids?: () => string;
   now?: () => Date;
+  fetch?: typeof fetch;
 };
 
 function hashToken(token: string): string {
@@ -58,12 +71,14 @@ export class BlakID {
   readonly ids: () => string;
   readonly now: () => Date;
   readonly audit: ImmutableAuditLog;
+  readonly fetch: typeof fetch;
 
   constructor(options: BlakIDOptions) {
     this.store = options.store;
     this.runtime = options.runtime;
     this.ids = options.ids ?? (() => randomBytes(16).toString("hex"));
     this.now = options.now ?? (() => new Date());
+    this.fetch = options.fetch ?? fetch;
     this.audit = new ImmutableAuditLog(
       {
         append: (event) => this.store.appendAudit(event),
@@ -78,14 +93,14 @@ export class BlakID {
   private async record(
     actor: Principal,
     organisationId: string,
-    action: AuditAction,
+    action: AuditAction | string,
     targetType: string,
     targetId: string,
     result: AuditEvent["result"],
     ctx: RequestContext | undefined,
     metadata: Record<string, unknown> = {},
   ) {
-    return this.audit.record({
+    const event = await this.audit.record({
       organisation_id: organisationId,
       actor_id: actor.actorId,
       actor_type: actor.actorType,
@@ -99,6 +114,8 @@ export class BlakID {
       result,
       metadata,
     });
+    await this.dispatchWebhooks(event).catch(() => undefined);
+    return event;
   }
 
   private client(organisationId: string) {
@@ -179,6 +196,9 @@ export class BlakID {
       lastRestoreTest: deployment?.lastRestoreTestAt,
       hostname: org.customDomain ?? org.hostname,
       hostingModel: org.hostingModel,
+      byoc: org.hostingModel === "customer_aws" || org.hostingModel === "self_hosted"
+        ? this.byocManifest(org)
+        : null,
     };
   }
 
@@ -422,12 +442,20 @@ export class BlakID {
 
   async listApplications(actor: Principal, organisationId: string) {
     authorize(actor, "applications.read", organisationId);
-    return this.client(organisationId).listOidcApplications();
+    const [oidc, saml] = await Promise.all([
+      this.client(organisationId).listOidcApplications(),
+      this.client(organisationId).listSamlApplications(),
+    ]);
+    return [...oidc, ...saml];
   }
 
   async getApplication(actor: Principal, organisationId: string, id: string) {
     authorize(actor, "applications.read", organisationId);
-    return this.client(organisationId).getOidcApplication(id);
+    try {
+      return await this.client(organisationId).getOidcApplication(id);
+    } catch {
+      return this.client(organisationId).getSamlApplication(id);
+    }
   }
 
   async createGroup(actor: Principal, organisationId: string, name: string, ctx?: RequestContext) {
@@ -646,7 +674,12 @@ export class BlakID {
       expiresAt: input.expiresAt ?? null,
       createdAt: this.now().toISOString(),
     };
-    return this.store.insertAccessRequest(request);
+    const created = await this.store.insertAccessRequest(request);
+    await this.record(actor, organisationId, "application.access.requested", "access_request", created.id, "success", undefined, {
+      applicationId: input.applicationId,
+      requestedRole: input.requestedRole,
+    });
+    return created;
   }
 
   async decideAccessRequest(actor: Principal, organisationId: string, id: string, decision: "approved" | "denied") {
@@ -660,7 +693,49 @@ export class BlakID {
       approverId: actor.actorId,
       decidedAt: this.now().toISOString(),
     };
-    return this.store.updateAccessRequest(next);
+    const saved = await this.store.updateAccessRequest(next);
+    if (decision === "approved") {
+      const groups = await this.client(organisationId).listGroups();
+      let group = groups.find((g) => g.name === current.requestedRole);
+      if (!group) group = await this.client(organisationId).createGroup(current.requestedRole);
+      await this.client(organisationId).addGroupMember(group.id, current.requesterId);
+      await this.record(actor, organisationId, "application.access.granted", "access_request", id, "success", undefined, {
+        applicationId: current.applicationId,
+        expiresAt: current.expiresAt,
+      });
+    } else {
+      await this.record(actor, organisationId, "application.access.denied", "access_request", id, "success", undefined, {});
+    }
+    return saved;
+  }
+
+  async tickAccessExpiry() {
+    const orgs = await this.store.listOrganisations();
+    for (const org of orgs) {
+      const requests = await this.store.listAccessRequests(org.id);
+      for (const request of requests) {
+        if (request.status !== "approved" || !request.expiresAt) continue;
+        if (new Date(request.expiresAt).getTime() > this.now().getTime()) continue;
+        const groups = await this.client(org.id).listGroups();
+        const group = groups.find((g) => g.name === request.requestedRole);
+        if (group) {
+          await this.client(org.id).removeGroupMember(group.id, request.requesterId).catch(() => undefined);
+        }
+        await this.store.updateAccessRequest({ ...request, status: "denied" });
+        const actor: Principal = {
+          actorId: "system",
+          actorType: "system",
+          role: "AUDITOR",
+          email: "system@blakid",
+          name: "BlakID",
+          organisationId: org.id,
+          sessionId: "tick",
+        };
+        await this.record(actor, org.id, "application.access.revoked", "access_request", request.id, "success", undefined, {
+          reason: "expired",
+        });
+      }
+    }
   }
 
   async listAccessRequests(actor: Principal, organisationId: string) {
@@ -822,6 +897,505 @@ export class BlakID {
       dormantAccounts: 0,
       suspendedUsers: suspended.length,
       serviceAccounts: services.length,
+    };
+  }
+
+  async createSamlApplication(
+    actor: Principal,
+    organisationId: string,
+    input: { name: string; slug: string; acsUrl: string; audience?: string; metadataXml?: string },
+    ctx?: RequestContext,
+  ): Promise<SamlApplication> {
+    authorize(actor, "applications.write", organisationId);
+    const app = await this.client(organisationId).createSamlApplication(input);
+    await this.record(actor, organisationId, "application.created", "application", app.id, "success", ctx, {
+      protocol: "saml",
+      slug: app.slug,
+    });
+    return app;
+  }
+
+  async applyCatalogue(actor: Principal, organisationId: string, input: CatalogueApplyInput, ctx?: RequestContext) {
+    authorize(actor, "applications.write", organisationId);
+    const plan = catalogueApplyPlan(input);
+    if (plan.ldapLegacy) {
+      throw new Error("LDAP is a legacy integration. Prefer OpenID Connect or SAML.");
+    }
+    let oidc: OidcApplication | null = null;
+    let saml: SamlApplication | null = null;
+    let scim = null;
+    if (plan.createOidc) {
+      if (!input.redirectUris?.length) throw new Error("OIDC catalogue items need redirectUris");
+      oidc = await this.createOidcApplication(
+        actor,
+        organisationId,
+        {
+          name: plan.name,
+          slug: plan.slug,
+          redirectUris: input.redirectUris,
+          logoutUri: input.logoutUri,
+        },
+        ctx,
+      );
+    }
+    if (plan.createSaml) {
+      if (!input.acsUrl && !input.redirectUris?.[0]) throw new Error("SAML catalogue items need acsUrl");
+      saml = await this.createSamlApplication(
+        actor,
+        organisationId,
+        {
+          name: plan.name,
+          slug: `${plan.slug}-saml`,
+          acsUrl: input.acsUrl ?? input.redirectUris![0],
+          audience: input.audience,
+        },
+        ctx,
+      );
+    }
+    if (plan.createScim && input.scimUrl && input.scimToken) {
+      scim = await this.createOutboundScim(actor, organisationId, {
+        name: `${plan.name} SCIM`,
+        slug: `${plan.slug}-scim`,
+        url: input.scimUrl,
+        token: input.scimToken,
+      });
+    }
+    return { plan, oidc, saml, scim };
+  }
+
+  async createFederationSource(
+    actor: Principal,
+    organisationId: string,
+    input: {
+      name: string;
+      slug: string;
+      type: "entra" | "google" | "oidc" | "saml";
+      clientId?: string;
+      clientSecret?: string;
+      wellKnownUrl?: string;
+      ssoUrl?: string;
+      entityId?: string;
+      metadataXml?: string;
+    },
+    ctx?: RequestContext,
+  ) {
+    authorize(actor, "organisation.settings.write", organisationId);
+    const source = await this.client(organisationId).createFederationSource(input);
+    await this.record(actor, organisationId, "federation.source.created", "federation_source", source.id, "success", ctx, {
+      type: input.type,
+      slug: input.slug,
+    });
+    return source;
+  }
+
+  async listFederationSources(actor: Principal, organisationId: string) {
+    authorize(actor, "applications.read", organisationId);
+    return this.client(organisationId).listFederationSources();
+  }
+
+  async createOutboundScim(
+    actor: Principal,
+    organisationId: string,
+    input: { name: string; slug: string; url: string; token: string },
+  ) {
+    authorize(actor, "applications.write", organisationId);
+    return this.client(organisationId).createScimProvider(input);
+  }
+
+  async createInboundScimToken(actor: Principal, organisationId: string) {
+    authorize(actor, "organisation.settings.write", organisationId);
+    const token = this.ids() + this.ids();
+    await this.store.insertScimCredential({
+      id: this.ids(),
+      organisationId,
+      tokenHash: hashToken(token),
+      tokenHint: token.slice(-6),
+      createdAt: this.now().toISOString(),
+    });
+    return { token, hint: token.slice(-6) };
+  }
+
+  async scimUsers(token: string) {
+    const credential = await this.store.getScimCredentialByTokenHash(hashToken(token));
+    if (!credential) throw new Error("Invalid SCIM token");
+    const users = await this.client(credential.organisationId).listUsers();
+    return users.filter((u) => u.kind === "person");
+  }
+
+  async handleInboundScim(token: string, op: ScimOperation, resource: ScimUserResource) {
+    const credential = await this.store.getScimCredentialByTokenHash(hashToken(token));
+    if (!credential) throw new Error("Invalid SCIM token");
+    const organisationId = credential.organisationId;
+    const client = this.client(organisationId);
+    const result = await applyScimUser(
+      {
+        findByEmail: (email) => client.findUserByEmail(email),
+        get: (id) => client.getUser(id),
+        list: () => client.listUsers(),
+        create: async (input) =>
+          client.createUser({
+            username: input.email,
+            email: input.email,
+            name: input.name,
+            state: "INVITED",
+            kind: "person",
+          }),
+        setState: async (id, to) => {
+          const user = await client.getUser(id);
+          const next = transition(user.state, to);
+          const updated = await client.updateUser(id, {
+            state: next,
+            isActive: next === "ACTIVE" || next === "INVITED",
+          });
+          if (next === "SUSPENDED" || next === "ARCHIVED") {
+            await client.revokeAllSessions(id);
+          }
+          return updated;
+        },
+      },
+      op,
+      resource,
+    );
+    const actor: Principal = {
+      actorId: "scim",
+      actorType: "system",
+      role: "IDENTITY_ADMINISTRATOR",
+      email: "scim@blakid",
+      name: "SCIM",
+      organisationId,
+      sessionId: "scim",
+    };
+    await this.record(actor, organisationId, `identity.${result.action === "created" ? "created" : result.action === "suspended" ? "suspended" : result.action === "archived" ? "archived" : "updated"}`, "identity", result.user.id, "success", undefined, {
+      source: "scim",
+    });
+    return result;
+  }
+
+  async listAdministrators(actor: Principal, organisationId: string) {
+    authorize(actor, "identity.users.read", organisationId);
+    const members = await this.store.listMembers(organisationId);
+    return members.filter((m) => m.role !== "USER");
+  }
+
+  async assignAdministrator(
+    actor: Principal,
+    organisationId: string,
+    memberId: string,
+    role: Role,
+    ctx?: RequestContext,
+  ) {
+    authorize(actor, "identity.memberships.write", organisationId);
+    if (role === "YUMA_PLATFORM_OPERATOR") {
+      throw new ForbiddenError("Organisation members cannot hold the Yuma platform operator role");
+    }
+    const members = await this.store.listMembers(organisationId);
+    const member = members.find((m) => m.id === memberId);
+    if (!member) throw new Error("Administrator not found");
+    const next = await this.store.updateMember({ ...member, role });
+    await this.record(actor, organisationId, "role.assigned", "member", memberId, "success", ctx, { role });
+    return next;
+  }
+
+  async createServiceIdentity(
+    actor: Principal,
+    organisationId: string,
+    input: {
+      kind: IdentityKind;
+      email: string;
+      name: string;
+      ownerId: string;
+      purpose: string;
+      expiresAt?: string | null;
+      permittedApplications?: string[];
+      modelProvider?: string | null;
+    },
+    ctx?: RequestContext,
+  ) {
+    authorize(actor, "identity.users.write", organisationId);
+    if (input.kind === "person") throw new Error("Service identities cannot be people");
+    const user = await this.client(organisationId).createUser({
+      username: input.email.toLowerCase(),
+      email: input.email.toLowerCase(),
+      name: input.name,
+      state: "ACTIVE",
+      kind: input.kind,
+      attributes: {
+        blakid_owner: input.ownerId,
+        blakid_purpose: input.purpose,
+        blakid_expires_at: input.expiresAt ?? null,
+        blakid_permitted_apps: input.permittedApplications ?? [],
+        blakid_model_provider: input.modelProvider ?? null,
+      },
+    });
+    await this.record(actor, organisationId, "identity.created", "service_identity", user.id, "success", ctx, {
+      kind: input.kind,
+      ownerId: input.ownerId,
+      purpose: input.purpose,
+    });
+    return user;
+  }
+
+  async securityDashboard(actor: Principal, organisationId: string) {
+    authorize(actor, "audit.read", organisationId);
+    const users = await this.client(organisationId).listUsers();
+    const members = await this.store.listMembers(organisationId);
+    const people = users.filter((u) => u.kind === "person");
+    const privilegedIds = new Set(
+      members.filter((m) => m.role !== "USER" && m.authentikUserId).map((m) => m.authentikUserId as string),
+    );
+    const authenticators = await Promise.all(people.map((u) => this.client(organisationId).listUserAuthenticators(u.id)));
+    const byUser = new Map(authenticators.map((a) => [a.userId, a]));
+    const withPasskey = people.filter((u) => (byUser.get(u.id)?.webauthn ?? 0) > 0).length;
+    const withMfa = people.filter((u) => {
+      const a = byUser.get(u.id);
+      return (a?.webauthn ?? 0) > 0 || (a?.totp ?? 0) > 0;
+    }).length;
+    const now = this.now().getTime();
+    const dormant = people.filter((u) => {
+      if (u.state !== "ACTIVE") return false;
+      if (!u.lastLoginAt) return true;
+      return now - new Date(u.lastLoginAt).getTime() > 120 * 86400000;
+    });
+    const services = users.filter((u) => u.kind !== "person");
+    const expiring = services.filter((u) => {
+      const expires = u.attributes.blakid_expires_at;
+      if (typeof expires !== "string" || !expires) return false;
+      const t = new Date(expires).getTime();
+      return t > now && t < now + 14 * 86400000;
+    });
+    const noMfa = people.filter((u) => {
+      const a = byUser.get(u.id);
+      return (a?.webauthn ?? 0) === 0 && (a?.totp ?? 0) === 0;
+    });
+    const privilegedWeak = people.filter((u) => {
+      if (!privilegedIds.has(u.id)) return false;
+      const a = byUser.get(u.id);
+      return (a?.webauthn ?? 0) === 0;
+    });
+    const findings: string[] = [];
+    if (noMfa.length) findings.push(`${noMfa.length} users do not have MFA`);
+    if (privilegedWeak.length) {
+      findings.push(
+        `${privilegedWeak.length} privileged accounts use password + TOTP rather than phishing-resistant MFA`,
+      );
+    }
+    if (expiring.length) findings.push(`${expiring.length} service credentials expire within 14 days`);
+    if (dormant.length) findings.push(`${dormant.length} accounts have not authenticated in 120 days`);
+    const adminsWithoutPasskey = privilegedWeak.length;
+    if (adminsWithoutPasskey) findings.push(`${adminsWithoutPasskey} administrator accounts have never registered a passkey`);
+    return {
+      users: people.length,
+      privilegedAccounts: privilegedIds.size,
+      passkeyAdoption: people.length === 0 ? 0 : Math.round((withPasskey / people.length) * 100),
+      mfaCoverage: people.length === 0 ? 0 : Math.round((withMfa / people.length) * 100),
+      dormantAccounts: dormant.length,
+      suspendedUsers: people.filter((u) => u.state === "SUSPENDED").length,
+      applications: (await this.client(organisationId).listOidcApplications()).length +
+        (await this.client(organisationId).listSamlApplications()).length,
+      serviceAccounts: services.length,
+      expiringCredentials: expiring.length,
+      findings,
+    };
+  }
+
+  async createWebhook(
+    actor: Principal,
+    organisationId: string,
+    input: { url: string; secret: string; events: WebhookEventName[] },
+  ) {
+    authorize(actor, "organisation.settings.write", organisationId);
+    return this.store.insertWebhook({
+      id: this.ids(),
+      organisationId,
+      url: input.url,
+      secret: input.secret,
+      events: input.events,
+      createdAt: this.now().toISOString(),
+    });
+  }
+
+  async listWebhooks(actor: Principal, organisationId: string) {
+    authorize(actor, "audit.read", organisationId);
+    return this.store.listWebhooks(organisationId);
+  }
+
+  async listWebhookDeliveries(actor: Principal, organisationId: string) {
+    authorize(actor, "audit.read", organisationId);
+    return this.store.listDeliveries(organisationId);
+  }
+
+  private async dispatchWebhooks(event: AuditEvent) {
+    const name = AUDIT_TO_WEBHOOK[event.action];
+    if (!name) return;
+    const endpoints = await this.store.listWebhooks(event.organisation_id);
+    const payload = JSON.stringify({
+      event: name,
+      event_id: event.event_id,
+      organisation_id: event.organisation_id,
+      timestamp: event.timestamp,
+      metadata: event.metadata,
+    });
+    for (const endpoint of endpoints) {
+      if (!endpoint.events.includes(name)) continue;
+      let delivery = await this.store.insertDelivery({
+        id: this.ids(),
+        webhookId: endpoint.id,
+        eventId: event.event_id,
+        event: name,
+        status: "pending",
+        attempts: 0,
+        lastError: null,
+        payload,
+        createdAt: event.timestamp,
+      });
+      delivery = await deliverOnce(endpoint, delivery, event.timestamp, this.fetch);
+      await this.store.updateDelivery(delivery);
+    }
+  }
+
+  async createTrust(
+    actor: Principal,
+    organisationId: string,
+    input: { peerOrganisationId: string; peerName: string; acceptAttributes: string[]; rejectAttributes: string[] },
+    ctx?: RequestContext,
+  ) {
+    authorize(actor, "organisation.settings.write", organisationId);
+    if (input.peerOrganisationId === organisationId) {
+      throw new Error("An organisation cannot create a universal trust with itself as global authority");
+    }
+    const policy = await this.store.insertTrust({
+      id: this.ids(),
+      organisationId,
+      peerOrganisationId: input.peerOrganisationId,
+      peerName: input.peerName,
+      acceptAttributes: input.acceptAttributes,
+      rejectAttributes: input.rejectAttributes,
+      createdAt: this.now().toISOString(),
+    });
+    await this.record(actor, organisationId, "federation.trust.created", "trust", policy.id, "success", ctx, {
+      peerOrganisationId: input.peerOrganisationId,
+    });
+    return policy;
+  }
+
+  async evaluateFederatedAssertions(
+    actor: Principal,
+    organisationId: string,
+    peerOrganisationId: string,
+    assertions: AttributeAssertion[],
+  ) {
+    authorize(actor, "identity.users.read", organisationId);
+    const policy = await this.store.getTrust(organisationId, peerOrganisationId);
+    return evaluateAssertions(policy, assertions);
+  }
+
+  async listTrusts(actor: Principal, organisationId: string) {
+    authorize(actor, "identity.users.read", organisationId);
+    return this.store.listTrusts(organisationId);
+  }
+
+  async createAgentAction(
+    actor: Principal,
+    organisationId: string,
+    input: { tool: string; arguments: Record<string, unknown> },
+  ): Promise<AgentAction> {
+    const tool = mcpTool(input.tool);
+    if (!tool) throw new Error(`Unknown MCP tool ${input.tool}`);
+    if (tool.write) authorize(actor, "identity.users.read", organisationId);
+    else authorize(actor, "applications.read", organisationId);
+    const action = await this.store.insertAgentAction({
+      id: this.ids(),
+      organisationId,
+      tool: input.tool,
+      arguments: input.arguments,
+      status: tool.requiresApproval ? "pending" : "approved",
+      requesterId: actor.actorId,
+      approverId: tool.requiresApproval ? null : actor.actorId,
+      createdAt: this.now().toISOString(),
+      decidedAt: tool.requiresApproval ? null : this.now().toISOString(),
+      result: null,
+    });
+    return action;
+  }
+
+  async decideAgentAction(actor: Principal, organisationId: string, id: string, decision: "approved" | "denied") {
+    authorize(actor, "applications.access.grant", organisationId);
+    const action = await this.store.getAgentAction(id);
+    if (!action || action.organisationId !== organisationId) throw new Error("Agent action not found");
+    const next: AgentAction = {
+      ...action,
+      status: decision,
+      approverId: actor.actorId,
+      decidedAt: this.now().toISOString(),
+    };
+    return this.store.updateAgentAction(next);
+  }
+
+  async executeAgentAction(actor: Principal, organisationId: string, id: string) {
+    const action = await this.store.getAgentAction(id);
+    if (!action || action.organisationId !== organisationId) throw new Error("Agent action not found");
+    if (writeRequiresApproval(action.tool) && action.status !== "approved") {
+      throw new Error("High-impact MCP actions require human approval");
+    }
+    const args = action.arguments;
+    let result: Record<string, unknown> = {};
+    if (action.tool === "blakid_suspend_user") {
+      const user = await this.suspendUser(actor, organisationId, String(args.userId));
+      result = { userId: user.id, state: user.state };
+    } else if (action.tool === "blakid_invite_user") {
+      const user = await this.inviteUser(actor, organisationId, {
+        email: String(args.email),
+        name: String(args.name),
+      });
+      result = { userId: user.id };
+    } else if (action.tool === "blakid_add_group_member") {
+      await this.addGroupMember(actor, organisationId, String(args.groupId), String(args.userId));
+      result = { ok: true };
+    } else if (action.tool === "blakid_remove_group_member") {
+      await this.removeGroupMember(actor, organisationId, String(args.groupId), String(args.userId));
+      result = { ok: true };
+    } else if (action.tool === "blakid_revoke_session") {
+      await this.revokeSessions(actor, organisationId, String(args.userId));
+      result = { ok: true };
+    } else {
+      throw new Error(`Cannot execute ${action.tool}`);
+    }
+    return this.store.updateAgentAction({
+      ...action,
+      status: "executed",
+      result,
+    });
+  }
+
+  async invokeMcp(actor: Principal, organisationId: string, tool: string, args: Record<string, unknown>) {
+    const spec = mcpTool(tool);
+    if (!spec) throw new Error(`Unknown MCP tool ${tool}`);
+    if (spec.requiresApproval) {
+      return this.createAgentAction(actor, organisationId, { tool, arguments: args });
+    }
+    if (tool === "blakid_list_users") return this.listUsers(actor, organisationId);
+    if (tool === "blakid_get_user") return this.getUser(actor, organisationId, String(args.userId));
+    if (tool === "blakid_list_groups") return this.listGroups(actor, organisationId);
+    if (tool === "blakid_get_group") {
+      const groups = await this.listGroups(actor, organisationId);
+      return groups.find((g) => g.id === args.groupId) ?? null;
+    }
+    if (tool === "blakid_list_applications") return this.listApplications(actor, organisationId);
+    if (tool === "blakid_get_audit_events") return this.listEvents(actor, organisationId);
+    if (tool === "blakid_list_security_findings" || tool === "blakid_get_identity_risk") {
+      return this.securityDashboard(actor, organisationId);
+    }
+    throw new Error(`Unhandled MCP tool ${tool}`);
+  }
+
+  byocManifest(organisation: Organisation) {
+    return {
+      hostingModel: organisation.hostingModel,
+      region: organisation.region,
+      yumaRole: "BlakIDYumaManagement",
+      terraform: "infrastructure/terraform/byoc",
+      customerOwns: ["BlakID control plane", "authentik", "PostgreSQL", "KMS", "logs"],
+      yumaAccess: "narrowly scoped cross-account role",
     };
   }
 }

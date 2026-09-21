@@ -2,7 +2,9 @@ import type { AuditEvent } from "@blakid/audit";
 import type { AuthentikClient, OidcApplication } from "@blakid/authentik";
 import type { Principal, Role } from "@blakid/authz";
 import type { HostingModel } from "@blakid/config";
+import type { TrustPolicy } from "@blakid/federation";
 import type { SupportAccessRequest } from "@blakid/support-access";
+import type { WebhookDelivery, WebhookEndpoint } from "@blakid/webhooks";
 
 export type OrganisationStatus = "provisioning" | "ready" | "degraded" | "suspended";
 
@@ -58,6 +60,27 @@ export type ControlPlaneMember = {
   name: string;
   role: Role;
   authentikUserId: string | null;
+  createdAt: string;
+};
+
+export type AgentAction = {
+  id: string;
+  organisationId: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  status: "pending" | "approved" | "denied" | "executed";
+  requesterId: string;
+  approverId: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+  result: Record<string, unknown> | null;
+};
+
+export type InboundScimCredential = {
+  id: string;
+  organisationId: string;
+  tokenHash: string;
+  tokenHint: string;
   createdAt: string;
 };
 
@@ -117,6 +140,7 @@ export interface BlakIDStore {
   updateDeployment(organisationId: string, patch: Partial<Deployment>): Promise<Deployment>;
   insertMember(member: ControlPlaneMember): Promise<ControlPlaneMember>;
   listMembers(organisationId: string): Promise<ControlPlaneMember[]>;
+  updateMember(member: ControlPlaneMember): Promise<ControlPlaneMember>;
   insertInvitation(invitation: Invitation): Promise<Invitation>;
   getInvitationByTokenHash(hash: string): Promise<Invitation | null>;
   insertSupport(request: SupportAccessRequest): Promise<SupportAccessRequest>;
@@ -128,6 +152,21 @@ export interface BlakIDStore {
   updateAccessRequest(request: AccessRequest): Promise<AccessRequest>;
   appendAudit(event: AuditEvent): Promise<AuditEvent>;
   listAudit(organisationId: string): Promise<AuditEvent[]>;
+  insertWebhook(endpoint: WebhookEndpoint): Promise<WebhookEndpoint>;
+  listWebhooks(organisationId: string): Promise<WebhookEndpoint[]>;
+  insertDelivery(delivery: WebhookDelivery): Promise<WebhookDelivery>;
+  listDeliveries(organisationId: string): Promise<WebhookDelivery[]>;
+  updateDelivery(delivery: WebhookDelivery): Promise<WebhookDelivery>;
+  insertTrust(policy: TrustPolicy): Promise<TrustPolicy>;
+  listTrusts(organisationId: string): Promise<TrustPolicy[]>;
+  getTrust(organisationId: string, peerOrganisationId: string): Promise<TrustPolicy | null>;
+  insertAgentAction(action: AgentAction): Promise<AgentAction>;
+  getAgentAction(id: string): Promise<AgentAction | null>;
+  listAgentActions(organisationId: string): Promise<AgentAction[]>;
+  updateAgentAction(action: AgentAction): Promise<AgentAction>;
+  insertScimCredential(credential: InboundScimCredential): Promise<InboundScimCredential>;
+  getScimCredentialByTokenHash(hash: string): Promise<InboundScimCredential | null>;
+  listScimCredentials(organisationId: string): Promise<InboundScimCredential[]>;
 }
 
 export type ProvisionInput = {

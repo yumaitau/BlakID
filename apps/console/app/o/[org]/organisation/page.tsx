@@ -39,8 +39,19 @@ export default async function OrganisationSettings({ params }: { params: Promise
             <dt className="text-mute">Hostname</dt>
             <dd>{sov.hostname}</dd>
           </div>
+          <div className="flex justify-between">
+            <dt className="text-mute">Hosting</dt>
+            <dd>{sov.hostingModel}</dd>
+          </div>
         </dl>
       </Panel>
+      {sov.byoc ? (
+        <Panel title="Bring-your-own-cloud">
+          <p className="text-sm text-mute">
+            Yuma role {sov.byoc.yumaRole}. Customer owns {sov.byoc.customerOwns.join(", ")}. Terraform: {sov.byoc.terraform}.
+          </p>
+        </Panel>
+      ) : null}
       <Panel title="Branding">
         <p className="text-sm text-mute">
           Dark-mode first. Warm charcoal, restrained orange, no fake cultural motifs, no padlock-heavy chrome.

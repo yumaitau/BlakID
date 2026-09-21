@@ -10,10 +10,17 @@ import {
   type AuthentikGroup,
   type AuthentikSession,
   type AuthentikUser,
+  type CreateFederationSourceInput,
   type CreateOidcAppInput,
+  type CreateSamlAppInput,
+  type CreateScimProviderInput,
   type CreateUserInput,
+  type FederationSource,
   type OidcApplication,
   type OidcDiscovery,
+  type SamlApplication,
+  type ScimProvider,
+  type UserAuthenticators,
 } from "./types.ts";
 
 type MemoryUser = AuthentikUser & { password?: string };
@@ -23,6 +30,10 @@ export class InMemoryAuthentik implements AuthentikClient {
   readonly groups = new Map<string, AuthentikGroup>();
   readonly sessions = new Map<string, AuthentikSession>();
   readonly applications = new Map<string, OidcApplication>();
+  readonly samlApplications = new Map<string, SamlApplication>();
+  readonly sources = new Map<string, FederationSource>();
+  readonly scimProviders = new Map<string, ScimProvider>();
+  readonly authenticators = new Map<string, UserAuthenticators>();
   private signingKey: { privateKey: CryptoKey; jwk: JWK } | null = null;
   private seq = 1;
 
@@ -72,6 +83,7 @@ export class InMemoryAuthentik implements AuthentikClient {
         ...(input.attributes ?? {}),
       },
       createdAt: this.now().toISOString(),
+      lastLoginAt: null,
       password: input.password,
     };
     if (user.state === "SUSPENDED" || user.state === "ARCHIVED" || user.state === "DELETED") {
@@ -260,7 +272,98 @@ export class InMemoryAuthentik implements AuthentikClient {
       user.state = "ACTIVE" as UserState;
       user.attributes.blakid_state = "ACTIVE";
     }
+    user.lastLoginAt = this.now().toISOString();
     return this.publicUser(user);
+  }
+
+  async createSamlApplication(input: CreateSamlAppInput): Promise<SamlApplication> {
+    const origin = this.baseUrl.replace(/\/$/, "");
+    let acsUrl = input.acsUrl;
+    if (input.metadataXml) {
+      const acs = input.metadataXml.match(/AssertionConsumerService[^>]*Location="([^"]+)"/i);
+      if (acs) acsUrl = acs[1];
+    }
+    const app: SamlApplication = {
+      id: this.nextId("saml"),
+      name: input.name,
+      slug: input.slug,
+      protocol: "saml",
+      acsUrl,
+      audience: input.audience ?? acsUrl,
+      entityId: input.entityId ?? `${origin}/application/saml/${input.slug}/`,
+      metadataUrl: `${origin}/application/saml/${input.slug}/metadata/`,
+      metadataXml: this.samlMetadata(input.slug, input.entityId ?? `${origin}/application/saml/${input.slug}/`),
+      nameId: input.nameId ?? "email",
+    };
+    this.samlApplications.set(app.id, app);
+    return { ...app };
+  }
+
+  async getSamlApplication(id: string): Promise<SamlApplication> {
+    const app = this.samlApplications.get(id) ?? [...this.samlApplications.values()].find((a) => a.slug === id);
+    if (!app) throw new AuthentikApiError(404, "SAML application not found");
+    return { ...app };
+  }
+
+  async listSamlApplications(): Promise<SamlApplication[]> {
+    return [...this.samlApplications.values()].map((a) => ({ ...a }));
+  }
+
+  async createFederationSource(input: CreateFederationSourceInput): Promise<FederationSource> {
+    const source: FederationSource = {
+      id: this.nextId("src"),
+      name: input.name,
+      slug: input.slug,
+      type: input.type,
+      clientId: input.clientId ?? null,
+      wellKnownUrl: input.wellKnownUrl ?? null,
+      ssoUrl: input.ssoUrl ?? null,
+      entityId: input.entityId ?? null,
+    };
+    this.sources.set(source.id, source);
+    return { ...source };
+  }
+
+  async listFederationSources(): Promise<FederationSource[]> {
+    return [...this.sources.values()].map((s) => ({ ...s }));
+  }
+
+  async createScimProvider(input: CreateScimProviderInput): Promise<ScimProvider> {
+    const provider: ScimProvider = {
+      id: this.nextId("scim"),
+      name: input.name,
+      slug: input.slug,
+      url: input.url,
+      direction: "outbound",
+    };
+    this.scimProviders.set(provider.id, { ...provider, token: input.token } as ScimProvider);
+    return { ...provider };
+  }
+
+  async listScimProviders(): Promise<ScimProvider[]> {
+    return [...this.scimProviders.values()].map((p) => ({ ...p }));
+  }
+
+  async listUserAuthenticators(userId: string): Promise<UserAuthenticators> {
+    return this.authenticators.get(userId) ?? { userId, webauthn: 0, totp: 0 };
+  }
+
+  async registerAuthenticator(userId: string, type: "webauthn" | "totp"): Promise<void> {
+    if (!this.users.get(userId)) throw new AuthentikApiError(404, "User not found");
+    const current = this.authenticators.get(userId) ?? { userId, webauthn: 0, totp: 0 };
+    current[type] += 1;
+    this.authenticators.set(userId, current);
+  }
+
+  private samlMetadata(slug: string, entityId: string): string {
+    const origin = this.baseUrl.replace(/\/$/, "");
+    return `<?xml version="1.0"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${entityId}">
+  <md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${origin}/application/saml/${slug}/sso/post/"/>
+    <md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${origin}/application/saml/${slug}/slo/post/"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>`;
   }
 
   async signIdToken(app: OidcApplication, user: AuthentikUser): Promise<string> {

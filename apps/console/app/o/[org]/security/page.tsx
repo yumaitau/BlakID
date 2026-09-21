@@ -10,23 +10,27 @@ export default async function SecurityPage({ params }: { params: Promise<{ org: 
   if (!principal?.organisationId) return null;
   const org = await getBlakID().store.getOrganisationBySlug(slug);
   if (!org) return null;
-  const users = await getBlakID().listUsers(principal, org.id);
-  const dash = getBlakID().dashboard(users);
+  const dash = await getBlakID().securityDashboard(principal, org.id);
   const sessions = await getBlakID().listSessions(principal, org.id);
   return (
     <div>
       <div className="grid grid-cols-4 gap-4">
         <Stat label="Users" value={String(dash.users)} />
         <Stat label="Privileged accounts" value={String(dash.privilegedAccounts)} />
+        <Stat label="MFA coverage" value={`${dash.mfaCoverage}%`} tone={dash.mfaCoverage < 90 ? "warn" : "ok"} />
+        <Stat label="Passkey adoption" value={`${dash.passkeyAdoption}%`} />
         <Stat label="Suspended" value={String(dash.suspendedUsers)} tone={dash.suspendedUsers ? "warn" : "ok"} />
         <Stat label="Service accounts" value={String(dash.serviceAccounts)} />
+        <Stat label="Dormant" value={String(dash.dormantAccounts)} tone={dash.dormantAccounts ? "warn" : "ok"} />
+        <Stat label="Expiring credentials" value={String(dash.expiringCredentials)} tone={dash.expiringCredentials ? "warn" : "ok"} />
       </div>
       <div className="mt-8 grid grid-cols-2 gap-6">
         <Panel title="Findings">
           <ul className="text-sm space-y-2 text-mute">
-            <li>Passkey and MFA coverage is sourced from the organisation authentik deployment.</li>
-            <li>Privileged administration requires phishing-resistant authentication in authentik policies.</li>
-            <li>{sessions.length} tracked sessions in the identity engine.</li>
+            {dash.findings.length === 0 ? <li>No critical identity risks</li> : null}
+            {dash.findings.map((finding) => (
+              <li key={finding}>⚠ {finding}</li>
+            ))}
           </ul>
         </Panel>
         <Panel title="Sessions">
