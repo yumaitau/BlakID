@@ -1,0 +1,28 @@
+{
+  "name": "blakid",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sovereign identity infrastructure operated by Yuma IT, powered by authentik.",
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "dev": "pnpm --filter @blakid/console dev",
+    "build": "pnpm --filter @blakid/console build",
+    "start": "pnpm --filter @blakid/console start",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:e2e": "pnpm --filter @blakid/console exec playwright test",
+    "db:generate": "pnpm --filter @blakid/database generate",
+    "db:migrate": "pnpm --filter @blakid/database migrate",
+    "lint": "pnpm --filter @blakid/console lint",
+    "scan:secrets": "node scripts/scan-secrets.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^24.5.2",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

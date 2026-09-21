@@ -1,0 +1,12 @@
+# Copied next to tenant compose so it can be mounted read-only.
+version: 1
+metadata:
+  name: BlakID baseline
+entries:
+  - attrs:
+      title: BlakID
+      branding_title: BlakID
+    identifiers:
+      domain: blakid
+    model: authentik_brands.brand
+    id: blakid-brand

@@ -1,0 +1,13 @@
+{
+  "name": "@blakid/authentik",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@blakid/identity": "workspace:*",
+    "jose": "^6.1.0"
+  }
+}

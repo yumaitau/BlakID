@@ -1,0 +1,47 @@
+name: blakid
+
+services:
+  control-plane-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: blakid
+      POSTGRES_PASSWORD: blakid
+      POSTGRES_DB: blakid_control
+    ports:
+      - "55432:5432"
+    volumes:
+      - control_plane_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blakid -d blakid_control"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    labels:
+      blakid.role: control-plane-metadata
+      blakid.note: Not an identity directory
+
+  control-plane:
+    image: node:22-alpine
+    working_dir: /app
+    command: ["sh", "-c", "corepack enable && pnpm --filter @blakid/console exec next dev --hostname 0.0.0.0 --port 3000"]
+    environment:
+      DATABASE_URL: postgres://blakid:blakid@control-plane-db:5432/blakid_control
+      BLAKID_RUNTIME: memory
+      BLAKID_SESSION_SECRET: local-dev-only-not-for-production-use-32b
+      BLAKID_DEFAULT_REGION: ap-southeast-2
+      BLAKID_PUBLIC_BASE_URL: http://127.0.0.1:3000
+      BLAKID_BOOTSTRAP_OPERATOR_EMAIL: josh@yuma.example
+      BLAKID_BOOTSTRAP_OPERATOR_NAME: Josh
+      BLAKID_BOOTSTRAP_OPERATOR_PASSWORD: change-me-operator
+    volumes:
+      - ../..:/app
+    ports:
+      - "3000:3000"
+    depends_on:
+      control-plane-db:
+        condition: service_healthy
+    profiles: ["app"]
+
+volumes:
+  control_plane_db:

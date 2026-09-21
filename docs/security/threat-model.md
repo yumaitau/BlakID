@@ -1,0 +1,24 @@
+# BlakID threat model
+
+Scope: Milestone 1 control plane, dedicated authentik stacks, support access, OIDC applications, backups. Residual risk is accepted only with monitoring.
+
+| Threat | Asset | Entry point | Impact | Mitigation | Residual risk | Monitoring |
+| --- | --- | --- | --- | --- | --- | --- |
+| Tenant escape | Organisation identity DB, tokens, audit | Buggy API, shared DB, path/IDOR | Read or modify another community's people | Dedicated authentik+Postgres per org; `organisationId` on every identity call; tenant-isolation tests are release blockers | Operator mistake wiring the wrong client | Isolation tests in CI; 403 logs on `TenantIsolationError` |
+| Compromised Yuma administrator | Deployments, backups, support workflow | Stolen operator session, phishing | Infra sabotage; attempted identity writes | Independence guard: operator role has no identity writes, impersonation, credential read, membership changes or access grants; support access requires customer approval | Operator with break-glass plus social engineering of an owner | `support.access.*` events; alerts on break-glass |
+| Compromised customer administrator | Users, apps, policies | Phished owner, malware | Suspend everyone, mint OIDC clients, approve support | Phishing-resistant MFA for privileged admin (authentik policy); session revoke; audit | Owner who is also the attacker | Privileged action audit; MFA coverage dashboard |
+| Stolen signing key | ID tokens, SAML assertions | Disk, backup, memory dump | Forge tokens for any app in that tenant | Per-tenant keys; KMS in production; short access tokens; key age visible | Key stolen and used before rotation | Signing-key age; cert expiry in control plane |
+| Stolen refresh token | User session at an application | XSS on RP, device theft | Replay access until rotation | Refresh rotation in authentik; revoke refresh tokens on suspend; short lifetimes | Token used in the rotation window | `session.revoked`; failed refresh |
+| Malicious application | User claims, client secret | Rogue redirect URI, over-broad scopes | Token theft, consent abuse | Exact redirect URIs; confidential clients; admin-created apps only in MVP | Admin adds a hostile app | `application.created` audit |
+| SCIM compromise | Downstream SaaS accounts | Stolen SCIM token | Create/suspend accounts in SaaS | Milestone 2; never silent-delete in BlakID when upstream removes a person | SCIM token abuse on the SaaS side | SCIM failure metrics (M2) |
+| Directory-sync compromise | BlakID identities | Hostile Entra sync | Flood of invites or mass suspend | Inbound sync is M2; lifecycle is active→suspended→archived→deleted after retention | Malicious sync once enabled | Sync audit; anomaly on bulk suspend |
+| Support-access abuse | Customer directory (scoped) | Operator pressure, stolen request id | Read users, revoke sessions | Reason required; customer approve; expiry; no impersonation/credential scopes; review | Approved session used beyond the stated reason | Support events; mandatory review |
+| Database compromise | Tenant Postgres or control-plane DB | SQL injection, stolen snapshot | Identity dump or metadata dump | Dedicated DBs; no identity passwords in control plane; encryption at rest (KMS in prod) | Online attacker with DB creds | Backup access logs; anomaly |
+| Infrastructure compromise | Compute, network | Cloud account takeover | Full tenant control | Australian account, scoped roles, no standing cross-tenant IAM | Cloud root compromise | CloudTrail / equivalent |
+| Supply-chain compromise | Images, npm, GitHub Actions | Poisoned authentik tag, dependency | Backdoored IdP | Pin `ghcr.io/goauthentik/server:2026.8.3`; lockfiles; CI secret scan; no auto-promote latest | Compromised pinned version | Image digest verification; Dependabot |
+| Backup theft | pg_dump, config | Object storage, laptop | Offline identity copy | Backups stay in sovereignty region; encrypted; restore tests | Insider with backup role | Backup status API; access logs |
+| DNS hijacking | Hostnames, ACME | Registrar, DNS provider | Token issuance to attacker | Customer domains encouraged; monitor cert issuance | Registrar takeover | Certificate expiry + unexpected certs |
+| Session theft | Control-plane cookie, authentik session | XSS, MITM | Act as user or operator | HttpOnly SameSite cookies; TLS; session revoke; short TTL | XSS in console | `identity.login.*`; revoke APIs |
+| Insider threat | All of the above | Staff, contractor | Quiet data mining | Split roles; no standing support; immutable audit; data minimisation | Collusion between operator and owner | Audit export; access reviews |
+
+BlakID does not implement custom authentication cryptography. Protocol-level token forgery defences live in authentik; BlakID's job is isolation, RBAC, lifecycle, support workflow and evidence.

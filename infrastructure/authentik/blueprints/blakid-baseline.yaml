@@ -1,0 +1,20 @@
+# BlakID baseline authentik blueprint.
+# Branding and passkey-first flows live here so we do not fork authentik.
+version: 1
+metadata:
+  name: BlakID baseline
+entries:
+  - model: authentik_blueprints.metaapplyblueprint
+    attrs:
+      identifiers:
+        name: BlakID baseline
+      bind: {}
+  - attrs:
+      background: "#11100F"
+      title: BlakID
+      branding_title: BlakID
+      branding_default_flow_background: "#11100F"
+    identifiers:
+      domain: blakid
+    model: authentik_brands.brand
+    id: blakid-brand
