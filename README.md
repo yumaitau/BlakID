@@ -34,11 +34,26 @@ docker compose -f infrastructure/docker/compose.yaml up -d control-plane-db
 # Tenant stacks are written under infrastructure/docker/tenants/ (gitignored)
 ```
 
+## What ships
+
+- Milestone 1: dedicated authentik stack, OIDC + PKCE, passkey/TOTP enrolment, lifecycle, audit, support access
+- Milestone 2: SAML, catalogue, Entra/Google/OIDC/SAML sources, SCIM (no silent delete), delegated admins, security findings
+- Milestone 3: temporary access, service and Hermes agent identities, signed webhooks, syslog/CSV/JSON export, MCP with write approval, bring-your-own-cloud role
+- Milestone 4: pairwise signed federation. No global trust. A BlakID never proves Indigenous identity
+
 ## API
 
 - `GET /api/health`
 - `GET /api/ready`
-- `/api/v1/organisations|users|groups|applications|roles|access-requests|service-accounts|events|integrations`
+- `/api/v1/organisations|users|groups|applications|roles|access-requests|service-accounts|agents|events|integrations|federation|webhooks|support-access|security`
+- `POST /api/mcp` (JSON-RPC `tools/list`, `tools/call`)
+- `/api/scim/v2/Users`
+
+Audit export: `GET /api/v1/events?format=json|csv|syslog`
+
+## Licence
+
+Copyright (c) 2026 Yuma IT. Source is public. Redistribution requires a written licence. See [LICENSE](LICENSE).
 
 ## Docs
 
@@ -46,3 +61,4 @@ docker compose -f infrastructure/docker/compose.yaml up -d control-plane-db
 - [Threat model](docs/security/threat-model.md)
 - [ADRs](docs/adr/)
 - [Backups](docs/operations/backup.md)
+- [Bring-your-own-cloud](docs/operations/byoc.md)
