@@ -26,6 +26,7 @@ export function writeTenantEnv(input: {
   const dir = tenantDir(input.root, input.slug);
   mkdirSync(dir, { recursive: true });
   const envPath = join(dir, ".env");
+  const octet = input.httpPort % 200;
   const contents = [
     `COMPOSE_PROJECT_NAME=blakid-${input.slug}`,
     `PG_USER=authentik`,
@@ -40,6 +41,7 @@ export function writeTenantEnv(input: {
     `AUTHENTIK_BOOTSTRAP_PASSWORD=${input.bootstrapPassword}`,
     `AUTHENTIK_BOOTSTRAP_TOKEN=${input.bootstrapToken}`,
     `BACKUP_REGION=ap-southeast-2`,
+    `BLAKID_SUBNET=10.201.${octet}.0/24`,
   ].join("\n");
   writeFileSync(envPath, contents, { mode: 0o600 });
   return envPath;

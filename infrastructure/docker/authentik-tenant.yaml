@@ -47,7 +47,6 @@ services:
       AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
       AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
     volumes:
-      - ./blueprints:/blueprints/custom:ro
       - media:/media
       - certs:/certs
     ports:
@@ -79,7 +78,6 @@ services:
       AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
       AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
     volumes:
-      - ./blueprints:/blueprints/custom:ro
       - media:/media
       - certs:/certs
     depends_on:
@@ -92,3 +90,10 @@ volumes:
   database:
   media:
   certs:
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${BLAKID_SUBNET:-10.201.0.0/24}

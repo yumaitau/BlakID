@@ -1,12 +1,60 @@
-# Copied next to tenant compose so it can be mounted read-only.
+# Mounted into each dedicated authentik stack at /blueprints/custom.
 version: 1
 metadata:
   name: BlakID baseline
 entries:
-  - attrs:
-      title: BlakID
-      branding_title: BlakID
+  - id: stage-webauthn
+    model: authentik_stages_authenticator_webauthn.webauthnauthenticatorstage
     identifiers:
-      domain: blakid
-    model: authentik_brands.brand
-    id: blakid-brand
+      name: blakid-webauthn-setup
+    attrs:
+      name: blakid-webauthn-setup
+      friendly_name: Passkey
+      user_verification: required
+      resident_key_requirement: required
+  - id: stage-totp
+    model: authentik_stages_authenticator_totp.authenticatortotpstage
+    identifiers:
+      name: blakid-totp-setup
+    attrs:
+      name: blakid-totp-setup
+      friendly_name: Authenticator app
+      digits: 6
+  - id: flow-passkey
+    model: authentik_flows.flow
+    identifiers:
+      slug: blakid-passkey-enrol
+    attrs:
+      name: BlakID passkey enrolment
+      slug: blakid-passkey-enrol
+      designation: stage_configuration
+      title: Register a passkey
+      authentication: require_authenticated
+  - id: flow-totp
+    model: authentik_flows.flow
+    identifiers:
+      slug: blakid-totp-enrol
+    attrs:
+      name: BlakID TOTP enrolment
+      slug: blakid-totp-enrol
+      designation: stage_configuration
+      title: Register an authenticator app
+      authentication: require_authenticated
+  - id: bind-passkey
+    model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf flow-passkey
+      stage: !KeyOf stage-webauthn
+    attrs:
+      target: !KeyOf flow-passkey
+      stage: !KeyOf stage-webauthn
+      order: 0
+  - id: bind-totp
+    model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf flow-totp
+      stage: !KeyOf stage-totp
+    attrs:
+      target: !KeyOf flow-totp
+      stage: !KeyOf stage-totp
+      order: 0

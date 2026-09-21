@@ -1,5 +1,6 @@
-import { BlakID, MemoryStore, MemoryTenantRuntime } from "@blakid/control-plane";
+import { BlakID, MemoryStore } from "@blakid/control-plane";
 import { AUTHENTIK_VERSION } from "@blakid/config";
+import { createTenantRuntime, runtimeKindFromEnv } from "@blakid/provisioning";
 import { randomBytes } from "node:crypto";
 
 type GlobalBlak = {
@@ -14,9 +15,8 @@ function ids() {
 
 export function getBlakID(): BlakID {
   if (!g.__blakid) {
-    const store = new MemoryStore();
-    const runtime = new MemoryTenantRuntime(ids, () => new Date());
-    g.__blakid = new BlakID({ store, runtime, ids });
+    const { runtime } = createTenantRuntime({ ids, now: () => new Date() });
+    g.__blakid = new BlakID({ store: new MemoryStore(), runtime, ids });
   }
   return g.__blakid;
 }
@@ -26,5 +26,5 @@ export function resetBlakIDForTests(): BlakID {
   return getBlakID();
 }
 
-export const runtimeName = process.env.BLAKID_RUNTIME ?? "memory";
+export const runtimeName = runtimeKindFromEnv();
 export const authentikVersion = AUTHENTIK_VERSION;

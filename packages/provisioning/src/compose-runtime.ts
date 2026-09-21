@@ -1,23 +1,46 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
-import { HttpAuthentikClient, type AuthentikClient } from "@blakid/authentik";
-import { AUTHENTIK_VERSION, DEFAULT_REGION } from "@blakid/config";
-import type { Organisation, TenantRuntime } from "@blakid/control-plane";
-import { allocateHttpPort, readHttpPort, writeTenantEnv } from "./tenant-files.ts";
+import { ensureAuthenticatorEnrolment, HttpAuthentikClient, type AuthentikClient } from "@blakid/authentik";
+import {
+  AUTHENTIK_VERSION,
+  DEFAULT_REGION,
+  PASSKEY_ENROL_SLUG,
+  TOTP_ENROL_SLUG,
+  authentikFlowUrl,
+} from "@blakid/config";
+import type { BackupResult, Organisation, TenantRuntime } from "@blakid/control-plane";
+import { allocateHttpPort, tenantDir, writeTenantEnv } from "./tenant-files.ts";
 
-const execFileAsync = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
+
+export type ExecResult = { stdout: string; stderr: string };
+export type ComposeExec = (
+  file: string,
+  args: string[],
+  opts?: { env?: NodeJS.ProcessEnv; input?: string },
+) => Promise<ExecResult>;
+
+export type TenantRecord = {
+  organisationId: string;
+  slug: string;
+  project: string;
+  envFile: string;
+  httpPort: number;
+  url: string;
+  token: string;
+};
 
 export type ComposeRuntimeOptions = {
   tenantsRoot: string;
   composeFile: string;
   dockerHost?: string;
+  tenantHost?: string;
   ids: () => string;
   now: () => Date;
+  exec?: ComposeExec;
 };
 
 function dockerEnv(dockerHost?: string): NodeJS.ProcessEnv {
@@ -26,15 +49,62 @@ function dockerEnv(dockerHost?: string): NodeJS.ProcessEnv {
   return env;
 }
 
+export function tenantHostFromDocker(dockerHost?: string, explicit?: string): string {
+  if (explicit) return explicit;
+  if (dockerHost?.startsWith("ssh://")) {
+    try {
+      return new URL(dockerHost).hostname;
+    } catch {
+      return "127.0.0.1";
+    }
+  }
+  return "127.0.0.1";
+}
+
+const defaultExec: ComposeExec = (file, args, opts) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(file, args, { env: opts?.env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`${file} ${args.join(" ")} exited ${code}: ${stderr.slice(0, 400)}`));
+    });
+    if (opts?.input) child.stdin.end(opts.input);
+    else child.stdin.end();
+  });
+
 export class ComposeTenantRuntime implements TenantRuntime {
   private readonly clients = new Map<string, AuthentikClient>();
+  private readonly tenants = new Map<string, TenantRecord>();
   private readonly usedPorts = new Set<number>();
-  private readonly tokens = new Map<string, { url: string; token: string }>();
+  private readonly exec: ComposeExec;
 
-  constructor(private readonly options: ComposeRuntimeOptions) {}
+  constructor(private readonly options: ComposeRuntimeOptions) {
+    this.exec = options.exec ?? defaultExec;
+  }
+
+  registerTenant(record: TenantRecord, client?: AuthentikClient) {
+    this.tenants.set(record.organisationId, record);
+    this.usedPorts.add(record.httpPort);
+    if (client) this.clients.set(record.organisationId, client);
+  }
+
+  tenant(organisationId: string): TenantRecord {
+    const rec = this.tenants.get(organisationId);
+    if (!rec) throw new Error(`No identity stack for organisation ${organisationId}`);
+    return rec;
+  }
 
   async provision(organisation: Organisation) {
-    const httpPort = allocateHttpPort(this.usedPorts);
+    const httpPort = allocateHttpPort(this.usedPorts, 19100);
     const pgPass = randomBytes(18).toString("base64url");
     const secretKey = randomBytes(32).toString("base64url");
     const bootstrapToken = randomBytes(24).toString("base64url");
@@ -50,29 +120,49 @@ export class ComposeTenantRuntime implements TenantRuntime {
       bootstrapToken,
     });
     const envFile = join(this.options.tenantsRoot, organisation.slug, ".env");
-    await execFileAsync(
+    await this.exec(
       "docker",
       ["compose", "--env-file", envFile, "-f", this.options.composeFile, "-p", `blakid-${organisation.slug}`, "up", "-d"],
       { env: dockerEnv(this.options.dockerHost) },
     );
-    const url = `http://127.0.0.1:${httpPort}`;
+    const host = tenantHostFromDocker(this.options.dockerHost, this.options.tenantHost);
+    const url = `http://${host}:${httpPort}`;
     await waitFor(async () => {
       const res = await fetch(`${url}/-/health/ready/`);
       return res.ok;
     }, 180_000);
+    await waitFor(async () => {
+      const res = await fetch(`${url}/api/v3/core/users/me/`, {
+        headers: { Authorization: `Bearer ${bootstrapToken}` },
+      });
+      return res.ok;
+    }, 120_000);
     const client = new HttpAuthentikClient(url, bootstrapToken, AUTHENTIK_VERSION);
-    this.clients.set(organisation.id, client);
-    this.tokens.set(organisation.id, { url, token: bootstrapToken });
+    try {
+      await ensureAuthenticatorEnrolment(url, bootstrapToken);
+    } catch {
+      // Flows can also come from the mounted blueprint; enrolment URLs still point at the slugs.
+    }
+    const record: TenantRecord = {
+      organisationId: organisation.id,
+      slug: organisation.slug,
+      project: `blakid-${organisation.slug}`,
+      envFile,
+      httpPort,
+      url,
+      token: bootstrapToken,
+    };
+    this.registerTenant(record, client);
     return {
       client,
       deployment: {
         authentikUrl: url,
         authentikVersion: AUTHENTIK_VERSION,
         postgresName: `blakid-${organisation.slug}-postgresql-1`,
-        composeProject: `blakid-${organisation.slug}`,
+        composeProject: record.project,
         status: "healthy" as const,
-        lastBackupAt: this.options.now().toISOString(),
-        lastBackupStatus: "healthy",
+        lastBackupAt: null,
+        lastBackupStatus: null,
         lastRestoreTestAt: null,
         lastRestoreTestStatus: null,
         signingKeyCreatedAt: this.options.now().toISOString(),
@@ -92,22 +182,58 @@ export class ComposeTenantRuntime implements TenantRuntime {
     this.clients.set(organisationId, client);
   }
 
-  async backup(organisationId: string) {
-    const client = this.clientFor(organisationId);
-    const health = await client.health();
-    const dir = join(this.options.tenantsRoot, organisationId, "backups");
+  passkeyEnrolmentUrl(organisationId: string): string {
+    return authentikFlowUrl(this.tenant(organisationId).url, PASSKEY_ENROL_SLUG);
+  }
+
+  totpEnrolmentUrl(organisationId: string): string {
+    return authentikFlowUrl(this.tenant(organisationId).url, TOTP_ENROL_SLUG);
+  }
+
+  composeArgs(rec: TenantRecord, extra: string[]): string[] {
+    return ["compose", "--env-file", rec.envFile, "-f", this.options.composeFile, "-p", rec.project, ...extra];
+  }
+
+  async backup(organisationId: string): Promise<BackupResult> {
+    const rec = this.tenant(organisationId);
+    const dump = await this.exec("docker", this.composeArgs(rec, ["exec", "-T", "postgresql", "pg_dump", "-U", "authentik", "--no-owner", "authentik"]), {
+      env: dockerEnv(this.options.dockerHost),
+    });
+    if (!dump.stdout.includes("PostgreSQL database dump") && dump.stdout.length < 64) {
+      throw new Error(`pg_dump produced unusable output (${dump.stdout.length} bytes) ${dump.stderr.slice(0, 200)}`);
+    }
+    const dir = join(tenantDir(this.options.tenantsRoot, rec.slug), "backups");
     mkdirSync(dir, { recursive: true });
     const stamp = this.options.now().toISOString().replaceAll(":", "-");
-    writeFileSync(
-      join(dir, `${stamp}.json`),
-      JSON.stringify({ organisationId, at: stamp, health, region: DEFAULT_REGION }),
-    );
-    return { at: this.options.now().toISOString(), status: health.ready ? ("healthy" as const) : ("failed" as const), region: DEFAULT_REGION };
+    const path = join(dir, `${stamp}.sql`);
+    writeFileSync(path, dump.stdout);
+    return {
+      at: this.options.now().toISOString(),
+      status: "healthy",
+      region: DEFAULT_REGION,
+      engine: "pg_dump",
+      bytes: dump.stdout.length,
+      path,
+    };
   }
 
   async restoreTest(organisationId: string) {
-    const health = await this.health(organisationId);
-    return { at: this.options.now().toISOString(), status: health.ready ? ("PASS" as const) : ("FAIL" as const) };
+    const rec = this.tenant(organisationId);
+    const dir = join(tenantDir(this.options.tenantsRoot, rec.slug), "backups");
+    if (!existsSync(dir)) await this.backup(organisationId);
+    const files = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".sql")).sort() : [];
+    const latest = files.at(-1);
+    if (!latest) {
+      return { at: this.options.now().toISOString(), status: "FAIL" as const, engine: "pg_dump" };
+    }
+    const sql = readFileSync(join(dir, latest), "utf8");
+    const db = "authentik_restore_test";
+    const env = dockerEnv(this.options.dockerHost);
+    await this.exec("docker", this.composeArgs(rec, ["exec", "-T", "postgresql", "psql", "-U", "authentik", "-d", "postgres", "-c", `DROP DATABASE IF EXISTS ${db};`]), { env }).catch(() => ({ stdout: "", stderr: "" }));
+    await this.exec("docker", this.composeArgs(rec, ["exec", "-T", "postgresql", "psql", "-U", "authentik", "-d", "postgres", "-c", `CREATE DATABASE ${db};`]), { env });
+    await this.exec("docker", this.composeArgs(rec, ["exec", "-T", "postgresql", "psql", "-U", "authentik", "-d", db, "-v", "ON_ERROR_STOP=1"]), { env, input: sql });
+    await this.exec("docker", this.composeArgs(rec, ["exec", "-T", "postgresql", "psql", "-U", "authentik", "-d", "postgres", "-c", `DROP DATABASE ${db};`]), { env });
+    return { at: this.options.now().toISOString(), status: "PASS" as const, engine: "pg_dump" };
   }
 
   async health(organisationId: string) {
@@ -115,7 +241,7 @@ export class ComposeTenantRuntime implements TenantRuntime {
   }
 }
 
-export { readHttpPort };
+export { readHttpPort } from "./tenant-files.ts";
 
 async function waitFor(check: () => Promise<boolean>, timeoutMs: number) {
   const start = Date.now();

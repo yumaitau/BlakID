@@ -1,4 +1,5 @@
 import type { UserState } from "@blakid/identity";
+import { authentikUserRefs } from "./user-refs.ts";
 import {
   AuthentikApiError,
   type AuthentikClient,
@@ -161,7 +162,7 @@ export class HttpAuthentikClient implements AuthentikClient {
     if (!users.includes(userId)) users.push(userId);
     await this.request(`/api/v3/core/groups/${groupId}/`, {
       method: "PATCH",
-      body: JSON.stringify({ users: users.map(Number).map((n) => (Number.isNaN(n) ? userId : n)) }),
+      body: JSON.stringify({ users: authentikUserRefs(users) }),
     });
   }
 
@@ -170,7 +171,7 @@ export class HttpAuthentikClient implements AuthentikClient {
     const users = (Array.isArray(group.users) ? group.users.map(String) : []).filter((id) => id !== userId);
     await this.request(`/api/v3/core/groups/${groupId}/`, {
       method: "PATCH",
-      body: JSON.stringify({ users: users.map(Number).map((n) => (Number.isNaN(n) ? n : n)) }),
+      body: JSON.stringify({ users: authentikUserRefs(users) }),
     });
   }
 
@@ -218,21 +219,27 @@ export class HttpAuthentikClient implements AuthentikClient {
     const flows = (await this.request("/api/v3/flows/instances/?page_size=100")) as Json;
     const flowList = (flows.results as Json[] | undefined) ?? [];
     const authorization =
+      flowList.find((f) => asString(f.slug).includes("implicit-consent")) ??
       flowList.find((f) => asString(f.designation) === "authorization") ??
       flowList.find((f) => asString(f.slug).includes("authorization"));
     const invalidation =
+      flowList.find((f) => asString(f.slug).includes("provider-invalidation")) ??
       flowList.find((f) => asString(f.designation) === "invalidation") ??
       flowList.find((f) => asString(f.slug).includes("invalidation"));
     if (!authorization || !invalidation) {
       throw new AuthentikApiError(500, "Could not locate authentik authorization/invalidation flows");
     }
 
-    const scopes = (await this.request("/api/v3/propertymappings/scope/?page_size=100")) as Json;
+    const scopes = (await this.request("/api/v3/propertymappings/provider/scope/?page_size=100")) as Json;
     const scopeList = (scopes.results as Json[] | undefined) ?? [];
     const wanted = new Set(input.scopes ?? ["openid", "profile", "email", "offline_access"]);
     const propertyMappings = scopeList
       .filter((s) => wanted.has(asString(s.scope_name)))
       .map((s) => s.pk);
+
+    const certs = (await this.request("/api/v3/crypto/certificatekeypairs/?page_size=50")) as Json;
+    const certList = (certs.results as Json[] | undefined) ?? [];
+    const signingKey = certList.find((c) => asString(c.name).toLowerCase().includes("authentik")) ?? certList[0];
 
     const provider = (await this.request("/api/v3/providers/oauth2/", {
       method: "POST",
@@ -245,10 +252,12 @@ export class HttpAuthentikClient implements AuthentikClient {
         include_claims_in_id_token: true,
         issuer_mode: "per_provider",
         sub_mode: "user_email",
+        grant_types: ["authorization_code", "refresh_token", "client_credentials"],
         access_code_validity: "minutes=1",
         access_token_validity: "minutes=10",
         refresh_token_validity: "hours=24",
         property_mappings: propertyMappings,
+        ...(signingKey?.pk ? { signing_key: signingKey.pk } : {}),
       }),
     })) as Json;
 

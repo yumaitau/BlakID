@@ -55,6 +55,17 @@ describe("BlakID control plane vertical slice", () => {
       email: "owner-b@community-b.test",
     });
 
+    const enrol = await app.passkeyEnrolment(ownerA, communityA.organisation.id);
+    expect(enrol.engine).toBe("authentik");
+    expect(enrol.url).toContain("/if/flow/blakid-passkey-enrol/");
+    expect(enrol.totpUrl).toContain("/if/flow/blakid-totp-enrol/");
+    const dump = await app.backup(operator, communityA.organisation.id);
+    expect(dump.engine).toBe("directory_export");
+    expect(dump.bytes).toBeGreaterThan(10);
+    expect(dump.path).toBeTruthy();
+    const restore = await app.restoreTest(operator, communityA.organisation.id);
+    expect(restore.status).toBe("PASS");
+
     await expect(app.inviteUser(operator, communityA.organisation.id, {
       email: "josh@community-a.test",
       name: "Josh",

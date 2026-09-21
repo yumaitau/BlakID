@@ -109,6 +109,9 @@ importers:
 
   packages/authentik:
     dependencies:
+      '@blakid/config':
+        specifier: workspace:*
+        version: link:../config
       '@blakid/identity':
         specifier: workspace:*
         version: link:../identity

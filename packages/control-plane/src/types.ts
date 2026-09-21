@@ -84,15 +84,26 @@ export type TenantHandle = {
   client: AuthentikClient;
 };
 
+export type BackupResult = {
+  at: string;
+  status: "healthy" | "failed";
+  region: string;
+  engine: "pg_dump" | "directory_export";
+  bytes: number;
+  path?: string;
+};
+
 export interface TenantRuntime {
   provision(organisation: Organisation): Promise<{
     client: AuthentikClient;
     deployment: Omit<Deployment, "id" | "organisationId">;
   }>;
   clientFor(organisationId: string): AuthentikClient;
-  backup(organisationId: string): Promise<{ at: string; status: "healthy" | "failed"; region: string }>;
-  restoreTest(organisationId: string): Promise<{ at: string; status: "PASS" | "FAIL" }>;
+  backup(organisationId: string): Promise<BackupResult>;
+  restoreTest(organisationId: string): Promise<{ at: string; status: "PASS" | "FAIL"; engine: string }>;
   health(organisationId: string): Promise<{ live: boolean; ready: boolean; version: string }>;
+  passkeyEnrolmentUrl(organisationId: string): string;
+  totpEnrolmentUrl(organisationId: string): string;
 }
 
 export interface BlakIDStore {

@@ -53,6 +53,9 @@ async function handle(request: Request, params: Params) {
     if (resource === "organisations" && id && extra === "backup" && request.method === "POST") {
       return Response.json(await app.backup(principal!, id));
     }
+    if (resource === "organisations" && id && extra === "restore-test" && request.method === "POST") {
+      return Response.json(await app.restoreTest(principal!, id));
+    }
     if (resource === "organisations" && id && extra === "invite-admin" && request.method === "POST") {
       const body = z
         .object({ email: z.string().email(), name: z.string(), role: z.string().optional() })
@@ -196,6 +199,10 @@ async function handle(request: Request, params: Params) {
 
     if (resource === "integrations" && request.method === "GET") {
       return Response.json(CATALOGUE);
+    }
+
+    if (resource === "authentication" && extra === undefined && id === "passkeys" && request.method === "GET") {
+      return Response.json(await app.passkeyEnrolment(principal!, organisationId!));
     }
 
     if (resource === "support-access" && request.method === "POST" && !id) {

@@ -22,6 +22,13 @@ export const PALETTE = {
   danger: "#B9473E",
 } as const;
 
+export const PASSKEY_ENROL_SLUG = "blakid-passkey-enrol";
+export const TOTP_ENROL_SLUG = "blakid-totp-enrol";
+
+export function authentikFlowUrl(baseUrl: string, slug: string): string {
+  return `${baseUrl.replace(/\/$/, "")}/if/flow/${slug}/`;
+}
+
 export const RETENTION = {
   archivedDaysBeforeDelete: 90,
   supportSessionMinutes: 60,

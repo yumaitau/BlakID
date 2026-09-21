@@ -26,5 +26,6 @@ describe("tenant files", () => {
     expect(env).toContain("COMPOSE_PORT_HTTP=9100");
     expect(env).toContain("ghcr.io/goauthentik/server:2026.8.3");
     expect(env).toContain("BACKUP_REGION=ap-southeast-2");
+    expect(env).toContain("BLAKID_SUBNET=10.201.");
   });
 });

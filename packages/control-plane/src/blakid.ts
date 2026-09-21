@@ -10,6 +10,7 @@ import {
 import {
   DEFAULT_REGION,
   DEFAULT_REGION_LABEL,
+  PASSKEY_ENROL_SLUG,
   RETENTION,
   TENANT_HOST_SUFFIX,
   type HostingModel,
@@ -740,6 +741,16 @@ export class BlakID {
       ctx,
       { email: user.email },
     );
+  }
+
+  async passkeyEnrolment(actor: Principal, organisationId: string) {
+    authorize(actor, "applications.read", organisationId);
+    return {
+      engine: "authentik" as const,
+      flow: PASSKEY_ENROL_SLUG,
+      url: this.runtime.passkeyEnrolmentUrl(organisationId),
+      totpUrl: this.runtime.totpEnrolmentUrl(organisationId),
+    };
   }
 
   async backup(actor: Principal, organisationId: string) {
