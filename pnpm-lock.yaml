@@ -62,6 +62,9 @@ importers:
       '@blakid/scim':
         specifier: workspace:*
         version: link:../../packages/scim
+      '@blakid/secrets':
+        specifier: workspace:*
+        version: link:../../packages/secrets
       '@blakid/support-access':
         specifier: workspace:*
         version: link:../../packages/support-access

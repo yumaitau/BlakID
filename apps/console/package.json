@@ -23,6 +23,7 @@
     "@blakid/mcp": "workspace:*",
     "@blakid/provisioning": "workspace:*",
     "@blakid/scim": "workspace:*",
+    "@blakid/secrets": "workspace:*",
     "@blakid/support-access": "workspace:*",
     "@blakid/ui": "workspace:*",
     "@blakid/webhooks": "workspace:*",

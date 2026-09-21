@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 
 const PUBLIC_PREFIXES = [
   "/sign-in",
+  "/security",
   "/invite",
   "/api/health",
   "/api/ready",
