@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ComposeTenantRuntime, isUsablePgDump } from "./compose-runtime.ts";
@@ -90,6 +90,33 @@ describe("ComposeTenantRuntime backups", () => {
       token: "token",
     });
     await expect(runtime.backup("org-a")).rejects.toThrow(/unusable output/);
+  });
+
+  it("copies blueprints to a user-writable path on ssh docker hosts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "blakid-bp-"));
+    const composeFile = join(root, "authentik-tenant.yaml");
+    const bp = join(root, "blueprints");
+    mkdirSync(bp, { recursive: true });
+    writeFileSync(join(bp, "blakid-baseline.yaml"), "version: 1\n");
+    writeFileSync(composeFile, "name: t\n");
+    const calls: string[][] = [];
+    const runtime = new ComposeTenantRuntime({
+      tenantsRoot: root,
+      composeFile,
+      dockerHost: "ssh://justinmiddler@homelab",
+      ids: () => "id",
+      now: () => new Date("2026-09-22T01:00:00Z"),
+      exec: async (file, args) => {
+        calls.push([file, ...args]);
+        if (file === "ssh" && args.includes("HOME")) return { stdout: "/home/justinmiddler\n", stderr: "" };
+        return { stdout: "", stderr: "" };
+      },
+    });
+    const dir = await runtime.resolveBlueprintsDir();
+    expect(dir).toBe("/home/justinmiddler/blakid/blueprints");
+    expect(dir.startsWith("/var/lib/")).toBe(false);
+    expect(calls.some((c) => c[0] === "ssh" && c.includes("mkdir") && c.includes("/home/justinmiddler/blakid/blueprints"))).toBe(true);
+    expect(calls.some((c) => c[0] === "scp" && c.at(-1) === "justinmiddler@homelab:/home/justinmiddler/blakid/blueprints/")).toBe(true);
   });
 
   it("tears down the dedicated compose project", async () => {

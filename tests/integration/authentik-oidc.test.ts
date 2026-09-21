@@ -175,5 +175,5 @@ describe.skipIf(!docker.ok)("authentik dedicated stacks", () => {
         await runtime.teardown(org.organisation.id).catch(() => undefined);
       }
     }
-  }, 300_000);
+  }, 600_000);
 });

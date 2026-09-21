@@ -207,9 +207,11 @@ export class ComposeTenantRuntime implements TenantRuntime {
     const local = join(dirname(this.options.composeFile), "blueprints");
     const dockerHost = this.options.dockerHost;
     if (!dockerHost?.startsWith("ssh://")) return local;
-    const remote = "/var/lib/blakid/blueprints";
     const parsed = new URL(dockerHost);
     const dest = parsed.username ? `${parsed.username}@${parsed.hostname}` : parsed.hostname;
+    const home = (await this.exec("ssh", [dest, "printenv", "HOME"])).stdout.trim();
+    if (!home) throw new Error(`remote docker host ${dest} has no HOME`);
+    const remote = `${home}/blakid/blueprints`;
     await this.exec("ssh", [dest, "mkdir", "-p", remote]);
     const files = existsSync(local)
       ? readdirSync(local).filter((name) => name.endsWith(".yaml")).map((name) => join(local, name))
