@@ -22,6 +22,7 @@ export function writeTenantEnv(input: {
   bootstrapEmail: string;
   bootstrapPassword: string;
   bootstrapToken: string;
+  blueprintsDir?: string;
 }): string {
   const dir = tenantDir(input.root, input.slug);
   mkdirSync(dir, { recursive: true });
@@ -42,6 +43,7 @@ export function writeTenantEnv(input: {
     `AUTHENTIK_BOOTSTRAP_TOKEN=${input.bootstrapToken}`,
     `BACKUP_REGION=ap-southeast-2`,
     `BLAKID_SUBNET=10.201.${octet}.0/24`,
+    `BLAKID_BLUEPRINTS_DIR=${input.blueprintsDir ?? "./blueprints"}`,
   ].join("\n");
   writeFileSync(envPath, contents, { mode: 0o600 });
   return envPath;

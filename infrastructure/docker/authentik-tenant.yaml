@@ -47,6 +47,7 @@ services:
       AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
       AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
     volumes:
+      - ${BLAKID_BLUEPRINTS_DIR:-./blueprints}:/blueprints/custom:ro
       - media:/media
       - certs:/certs
     ports:
@@ -78,6 +79,7 @@ services:
       AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
       AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
     volumes:
+      - ${BLAKID_BLUEPRINTS_DIR:-./blueprints}:/blueprints/custom:ro
       - media:/media
       - certs:/certs
     depends_on:

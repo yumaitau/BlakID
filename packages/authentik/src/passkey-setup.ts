@@ -64,6 +64,8 @@ export async function ensureAuthenticatorEnrolment(baseUrl: string, token: strin
   const totpFlow = await ensureFlow(baseUrl, token, TOTP_ENROL_SLUG, "BlakID TOTP enrolment", "Register an authenticator app");
   await ensureBinding(baseUrl, token, String(passkeyFlow.pk), String(webauthn.pk));
   await ensureBinding(baseUrl, token, String(totpFlow.pk), String(totp.pk));
+  await requireEnrolmentFlow(baseUrl, token, PASSKEY_ENROL_SLUG);
+  await requireEnrolmentFlow(baseUrl, token, TOTP_ENROL_SLUG);
   return {
     passkeyUrl: authentikFlowUrl(baseUrl, PASSKEY_ENROL_SLUG),
     totpUrl: authentikFlowUrl(baseUrl, TOTP_ENROL_SLUG),
@@ -83,6 +85,24 @@ async function ensureFlow(baseUrl: string, token: string, slug: string, name: st
       authentication: "require_authenticated",
     }),
   })) as Json;
+}
+
+export async function requireEnrolmentFlow(
+  baseUrl: string,
+  token: string,
+  slug: string = PASSKEY_ENROL_SLUG,
+): Promise<Json> {
+  const raw = (await request(
+    baseUrl,
+    token,
+    `/api/v3/flows/instances/?slug=${encodeURIComponent(slug)}&page_size=100`,
+  )) as Json;
+  const results = (raw.results as Json[] | undefined) ?? [];
+  const flow = results.find((row) => row.slug === slug);
+  if (!flow) {
+    throw new AuthentikApiError(404, `authentik flow ${slug} is not present`);
+  }
+  return flow;
 }
 
 async function ensureBinding(baseUrl: string, token: string, flowPk: string, stagePk: string): Promise<void> {

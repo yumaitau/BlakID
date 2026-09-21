@@ -3,7 +3,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { authorizationCodePkceLogin, HttpAuthentikClient } from "../../packages/authentik/src/index.ts";
+import { authorizationCodePkceLogin, HttpAuthentikClient, requireEnrolmentFlow } from "../../packages/authentik/src/index.ts";
+import { PASSKEY_ENROL_SLUG } from "../../packages/config/src/index.ts";
 import { AUTHENTIK_VERSION } from "../../packages/config/src/index.ts";
 import { BlakID, createTestPrincipal, MemoryStore } from "../../packages/control-plane/src/index.ts";
 import { ComposeTenantRuntime, defaultComposeFile } from "../../packages/provisioning/src/compose-runtime.ts";
@@ -63,13 +64,16 @@ describe.skipIf(!docker.ok)("authentik dedicated stacks", () => {
     const app = new BlakID({ store: new MemoryStore(), runtime, ids, now });
     const operator = createTestPrincipal({ role: "YUMA_PLATFORM_OPERATOR", organisationId: null });
 
-    const a = await app.provisionOrganisation(operator, {
+    let a: Awaited<ReturnType<typeof app.provisionOrganisation>> | undefined;
+    let b: Awaited<ReturnType<typeof app.provisionOrganisation>> | undefined;
+    try {
+    a = await app.provisionOrganisation(operator, {
       name: "Community A",
       slug: `ca${ids().slice(0, 6)}`.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 10),
       adminEmail: "owner-a@a.test",
       adminName: "Owner A",
     });
-    const b = await app.provisionOrganisation(operator, {
+    b = await app.provisionOrganisation(operator, {
       name: "Community B",
       slug: `cb${ids().slice(0, 6)}`.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 10),
       adminEmail: "owner-b@b.test",
@@ -88,7 +92,10 @@ describe.skipIf(!docker.ok)("authentik dedicated stacks", () => {
     });
 
     const enrol = await app.passkeyEnrolment(ownerA, a.organisation.id);
-    expect(enrol.url).toContain("/if/flow/blakid-passkey-enrol/");
+    expect(enrol.url).toContain(`/if/flow/${PASSKEY_ENROL_SLUG}/`);
+    const recA = runtime.tenant(a.organisation.id);
+    const liveFlow = await requireEnrolmentFlow(recA.url, recA.token);
+    expect(liveFlow.slug).toBe(PASSKEY_ENROL_SLUG);
 
     const oidc = await app.createOidcApplication(ownerA, a.organisation.id, {
       name: "RangerOS",
@@ -162,5 +169,11 @@ describe.skipIf(!docker.ok)("authentik dedicated stacks", () => {
     expect(backup.bytes).toBeGreaterThan(64);
     const restore = await app.restoreTest(operator, a.organisation.id);
     expect(restore.status).toBe("PASS");
+    } finally {
+      for (const org of [a, b]) {
+        if (!org) continue;
+        await runtime.teardown(org.organisation.id).catch(() => undefined);
+      }
+    }
   }, 300_000);
 });

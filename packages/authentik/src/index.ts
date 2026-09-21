@@ -6,7 +6,7 @@ export {
   verifyPkceChallenge,
   type AuthorizationCodeResult,
 } from "./oidc-pkce.ts";
-export { ensureAuthenticatorEnrolment } from "./passkey-setup.ts";
+export { ensureAuthenticatorEnrolment, requireEnrolmentFlow } from "./passkey-setup.ts";
 export { authentikUserRef, authentikUserRefs } from "./user-refs.ts";
 export {
   AuthentikApiError,

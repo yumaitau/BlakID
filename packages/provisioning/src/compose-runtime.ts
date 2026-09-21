@@ -3,7 +3,12 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync, readdirSync, readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureAuthenticatorEnrolment, HttpAuthentikClient, type AuthentikClient } from "@blakid/authentik";
+import {
+  ensureAuthenticatorEnrolment,
+  requireEnrolmentFlow,
+  HttpAuthentikClient,
+  type AuthentikClient,
+} from "@blakid/authentik";
 import {
   AUTHENTIK_VERSION,
   DEFAULT_REGION,
@@ -41,6 +46,9 @@ export type ComposeRuntimeOptions = {
   ids: () => string;
   now: () => Date;
   exec?: ComposeExec;
+  enrol?: (url: string, token: string) => Promise<unknown>;
+  waitReady?: (url: string, token: string) => Promise<void>;
+  startingHttpPort?: number;
 };
 
 function dockerEnv(dockerHost?: string): NodeJS.ProcessEnv {
@@ -104,11 +112,12 @@ export class ComposeTenantRuntime implements TenantRuntime {
   }
 
   async provision(organisation: Organisation) {
-    const httpPort = allocateHttpPort(this.usedPorts, 19100);
+    const httpPort = allocateHttpPort(this.usedPorts, this.options.startingHttpPort ?? 19100);
     const pgPass = randomBytes(18).toString("base64url");
     const secretKey = randomBytes(32).toString("base64url");
     const bootstrapToken = randomBytes(24).toString("base64url");
     const bootstrapPassword = randomBytes(18).toString("base64url");
+    const blueprintsDir = await this.resolveBlueprintsDir();
     writeTenantEnv({
       root: this.options.tenantsRoot,
       slug: organisation.slug,
@@ -118,6 +127,7 @@ export class ComposeTenantRuntime implements TenantRuntime {
       bootstrapEmail: `bootstrap@${organisation.slug}.blakid.internal`,
       bootstrapPassword,
       bootstrapToken,
+      blueprintsDir,
     });
     const envFile = join(this.options.tenantsRoot, organisation.slug, ".env");
     await this.exec(
@@ -127,22 +137,25 @@ export class ComposeTenantRuntime implements TenantRuntime {
     );
     const host = tenantHostFromDocker(this.options.dockerHost, this.options.tenantHost);
     const url = `http://${host}:${httpPort}`;
-    await waitFor(async () => {
-      const res = await fetch(`${url}/-/health/ready/`);
-      return res.ok;
-    }, 180_000);
-    await waitFor(async () => {
-      const res = await fetch(`${url}/api/v3/core/users/me/`, {
-        headers: { Authorization: `Bearer ${bootstrapToken}` },
+    const waitReady =
+      this.options.waitReady ??
+      (async (readyUrl: string, token: string) => {
+        await waitFor(async () => {
+          const res = await fetch(`${readyUrl}/-/health/ready/`);
+          return res.ok;
+        }, 180_000);
+        await waitFor(async () => {
+          const res = await fetch(`${readyUrl}/api/v3/core/users/me/`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          return res.ok;
+        }, 120_000);
       });
-      return res.ok;
-    }, 120_000);
+    await waitReady(url, bootstrapToken);
     const client = new HttpAuthentikClient(url, bootstrapToken, AUTHENTIK_VERSION);
-    try {
-      await ensureAuthenticatorEnrolment(url, bootstrapToken);
-    } catch {
-      // Flows can also come from the mounted blueprint; enrolment URLs still point at the slugs.
-    }
+    const enrol = this.options.enrol ?? ensureAuthenticatorEnrolment;
+    await enrol(url, bootstrapToken);
+    await requireEnrolmentFlow(url, bootstrapToken);
     const record: TenantRecord = {
       organisationId: organisation.id,
       slug: organisation.slug,
@@ -190,6 +203,23 @@ export class ComposeTenantRuntime implements TenantRuntime {
     return authentikFlowUrl(this.tenant(organisationId).url, TOTP_ENROL_SLUG);
   }
 
+  async resolveBlueprintsDir(): Promise<string> {
+    const local = join(dirname(this.options.composeFile), "blueprints");
+    const dockerHost = this.options.dockerHost;
+    if (!dockerHost?.startsWith("ssh://")) return local;
+    const remote = "/var/lib/blakid/blueprints";
+    const parsed = new URL(dockerHost);
+    const dest = parsed.username ? `${parsed.username}@${parsed.hostname}` : parsed.hostname;
+    await this.exec("ssh", [dest, "mkdir", "-p", remote]);
+    const files = existsSync(local)
+      ? readdirSync(local).filter((name) => name.endsWith(".yaml")).map((name) => join(local, name))
+      : [];
+    if (files.length > 0) {
+      await this.exec("scp", [...files, `${dest}:${remote}/`]);
+    }
+    return remote;
+  }
+
   composeArgs(rec: TenantRecord, extra: string[]): string[] {
     return ["compose", "--env-file", rec.envFile, "-f", this.options.composeFile, "-p", rec.project, ...extra];
   }
@@ -199,7 +229,7 @@ export class ComposeTenantRuntime implements TenantRuntime {
     const dump = await this.exec("docker", this.composeArgs(rec, ["exec", "-T", "postgresql", "pg_dump", "-U", "authentik", "--no-owner", "authentik"]), {
       env: dockerEnv(this.options.dockerHost),
     });
-    if (!dump.stdout.includes("PostgreSQL database dump") && dump.stdout.length < 64) {
+    if (!isUsablePgDump(dump.stdout)) {
       throw new Error(`pg_dump produced unusable output (${dump.stdout.length} bytes) ${dump.stderr.slice(0, 200)}`);
     }
     const dir = join(tenantDir(this.options.tenantsRoot, rec.slug), "backups");
@@ -239,9 +269,21 @@ export class ComposeTenantRuntime implements TenantRuntime {
   async health(organisationId: string) {
     return this.clientFor(organisationId).health();
   }
+
+  async teardown(organisationId: string) {
+    const rec = this.tenant(organisationId);
+    await this.exec("docker", this.composeArgs(rec, ["down", "-v", "--remove-orphans"]), {
+      env: dockerEnv(this.options.dockerHost),
+    });
+  }
 }
 
 export { readHttpPort } from "./tenant-files.ts";
+
+/** A healthy tenant dump must be a real pg_dump, not an arbitrary long string. */
+export function isUsablePgDump(stdout: string): boolean {
+  return stdout.includes("PostgreSQL database dump");
+}
 
 async function waitFor(check: () => Promise<boolean>, timeoutMs: number) {
   const start = Date.now();

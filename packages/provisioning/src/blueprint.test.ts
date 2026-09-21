@@ -21,4 +21,10 @@ describe("authentik WebAuthn blueprint", () => {
       expect(yaml).toContain("user_verification: required");
     }
   });
+
+  it("mounts those blueprints into authentik server and worker", () => {
+    const compose = readFileSync(join(root, "infrastructure/docker/authentik-tenant.yaml"), "utf8");
+    expect(compose).toContain("/blueprints/custom");
+    expect(compose.match(/\/blueprints\/custom/g)?.length).toBeGreaterThanOrEqual(2);
+  });
 });
