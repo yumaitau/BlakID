@@ -2,6 +2,7 @@ import type { Permission } from "@blakid/authz";
 
 export const SUPPORT_STATUSES = [
   "requested",
+  "pending_second",
   "approved",
   "denied",
   "active",
@@ -24,6 +25,8 @@ export type SupportAccessRequest = {
   createdAt: string;
   approvedBy: string | null;
   approvedAt: string | null;
+  firstApproverId: string | null;
+  firstApprovedAt: string | null;
   startedAt: string | null;
   expiresAt: string | null;
   endedAt: string | null;
@@ -84,6 +87,8 @@ export function requestSupport(input: {
     createdAt: input.now.toISOString(),
     approvedBy: null,
     approvedAt: null,
+    firstApproverId: null,
+    firstApprovedAt: null,
     startedAt: null,
     expiresAt: null,
     endedAt: null,
@@ -98,7 +103,20 @@ export function approveSupport(
   now: Date,
   ttlMinutes: number,
 ): SupportAccessRequest {
-  if (request.status !== "requested") {
+  if (request.breakGlass && request.status === "requested") {
+    return {
+      ...request,
+      status: "pending_second",
+      firstApproverId: approverId,
+      firstApprovedAt: now.toISOString(),
+      alerted: true,
+    };
+  }
+  if (request.breakGlass && request.status === "pending_second") {
+    if (!request.firstApproverId || approverId === request.firstApproverId) {
+      throw new SupportAccessError("Break-glass needs a second person");
+    }
+  } else if (request.status !== "requested") {
     throw new SupportAccessError(`Cannot approve support request in status ${request.status}`);
   }
   const expires = new Date(now.getTime() + ttlMinutes * 60_000);
@@ -160,6 +178,9 @@ export function reviewSupport(
 ): SupportAccessRequest {
   if (request.status !== "ended" && request.status !== "expired") {
     throw new SupportAccessError("Review happens after the session closes");
+  }
+  if (request.breakGlass && notes.trim().length < 8) {
+    throw new SupportAccessError("Break-glass cannot close until the session is reviewed");
   }
   return { ...request, status: "reviewed", reviewNotes: notes };
 }

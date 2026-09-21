@@ -1,0 +1,11 @@
+# Production overlay. Australian default. Identity engine is compose, not memory.
+# Tenant authentik is not published on the host. See authentik-tenant.production.yaml.
+services:
+  control-plane:
+    environment:
+      BLAKID_ENV: production
+      BLAKID_RUNTIME: compose
+      BLAKID_DEFAULT_REGION: ap-southeast-2
+      BLAKID_PUBLIC_BASE_URL: https://console.blakid.au
+      NODE_ENV: production
+    command: ["sh", "-c", "corepack enable && pnpm --filter @blakid/console exec next start --hostname 0.0.0.0 --port 3000"]

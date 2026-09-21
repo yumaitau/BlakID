@@ -16,6 +16,7 @@
     "@blakid/integrations": "workspace:*",
     "@blakid/mcp": "workspace:*",
     "@blakid/scim": "workspace:*",
+    "@blakid/secrets": "workspace:*",
     "@blakid/support-access": "workspace:*",
     "@blakid/webhooks": "workspace:*",
     "jose": "^6.1.0"

@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -17,5 +19,52 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
-      - run: node scripts/scan-secrets.mjs
+      - run: pnpm test:unit
+      - run: node scripts/scan-secrets.mjs --history
+      - run: node scripts/check-authentik-pin.mjs
+      - run: pnpm audit --audit-level=high
+      - run: pnpm dlx @cyclonedx/cyclonedx-npm --output-file sbom.cdx.json --omit dev
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.cdx.json
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - id: pin
+        run: node -e "const fs=require('fs'); const t=fs.readFileSync('packages/config/src/index.ts','utf8'); const d=t.match(/sha256:[a-f0-9]{64}/)[0]; console.log('digest='+d)" >> "$GITHUB_OUTPUT"
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ghcr.io/goauthentik/server@${{ steps.pin.outputs.digest }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL
+          ignore-unfixed: true
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: docker info
+      - run: pnpm test:integration
+        env:
+          BLAKID_DOCKER_HOST: ""

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sharedRateLimiter } from "@blakid/guard";
 import { createTestPrincipal } from "@blakid/control-plane";
 import { getBlakID } from "../../../../lib/blakid.ts";
 import { requestContext } from "../../../../lib/principal.ts";
@@ -11,6 +12,11 @@ const schema = z.object({
 });
 
 export async function POST(request: Request) {
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
+  const limited = sharedRateLimiter().hit(`login:${ip}`);
+  if (!limited.ok) {
+    return Response.json({ error: "Too many sign-in attempts" }, { status: 429, headers: { "retry-after": String(Math.ceil(limited.retryAfterMs / 1000)) } });
+  }
   const body = schema.parse(await request.json());
   const bootstrapEmail = process.env.BLAKID_BOOTSTRAP_OPERATOR_EMAIL ?? "josh@yuma.example";
   const bootstrapPassword = process.env.BLAKID_BOOTSTRAP_OPERATOR_PASSWORD ?? "change-me-operator";

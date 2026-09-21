@@ -26,7 +26,11 @@ export async function unsealPrincipal(token: string): Promise<Principal | null> 
 }
 
 export function sessionCookie(token: string) {
-  return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${12 * 3600}`;
+  const secure =
+    process.env.BLAKID_ENV === "production" || (process.env.BLAKID_PUBLIC_BASE_URL ?? "").startsWith("https://")
+      ? "; Secure"
+      : "";
+  return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${12 * 3600}${secure}`;
 }
 
 export function clearSessionCookie() {

@@ -27,7 +27,12 @@ export default function SupportPage() {
   }, []);
 
   async function act(id: string, path: string) {
-    const response = await fetch(`/api/v1/support-access/${id}/${path}`, { method: "POST" });
+    const notes = path === "end" ? window.prompt("Review notes (required for break-glass)") ?? undefined : undefined;
+    const response = await fetch(`/api/v1/support-access/${id}/${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(notes ? { notes } : {}),
+    });
     const data = await response.json();
     setMessage(response.ok ? `${path} ${data.status ?? "ok"}` : data.error);
     void reload();

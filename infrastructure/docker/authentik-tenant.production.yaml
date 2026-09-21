@@ -1,0 +1,7 @@
+# Production override: do not publish authentik on the host.
+# The control plane reaches it on the docker network. Operators do not get the admin UI port.
+services:
+  server:
+    ports: !reset []
+    expose:
+      - "9000"

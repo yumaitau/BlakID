@@ -8,6 +8,15 @@ export function runtimeKindFromEnv(env: NodeJS.ProcessEnv = process.env): Runtim
   return env.BLAKID_RUNTIME === "compose" ? "compose" : "memory";
 }
 
+export function assertProductionRuntime(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.BLAKID_ENV === "production" && runtimeKindFromEnv(env) !== "compose") {
+    throw new Error("Production refuses the memory identity engine. Set BLAKID_RUNTIME=compose.");
+  }
+  if (env.BLAKID_ENV === "production" && env.BLAKID_DEFAULT_REGION && env.BLAKID_DEFAULT_REGION !== "ap-southeast-2") {
+    throw new Error("Production default region must be ap-southeast-2 unless a customer hosting model overrides it.");
+  }
+}
+
 export function createTenantRuntime(input: {
   env?: NodeJS.ProcessEnv;
   ids: () => string;
@@ -16,6 +25,7 @@ export function createTenantRuntime(input: {
   composeFile?: string;
 }): { kind: RuntimeKind; runtime: TenantRuntime } {
   const env = input.env ?? process.env;
+  assertProductionRuntime(env);
   const kind = runtimeKindFromEnv(env);
   if (kind === "compose") {
     const dockerHost = env.BLAKID_DOCKER_HOST || env.DOCKER_HOST || undefined;

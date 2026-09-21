@@ -361,5 +361,27 @@ describe("Milestone 2-4 control plane", () => {
     const listed = await app.listSupportAccess(owner, orgId);
     expect(listed.some((s) => s.id === support.id && s.status === "requested")).toBe(true);
   });
+
+  it("refuses new applications when the signing key is older than 90 days", async () => {
+    const { app, owner, orgId, store } = await org();
+    const deployment = await store.getDeployment(orgId);
+    if (!deployment) throw new Error("missing deployment");
+    await store.updateDeployment(orgId, { signingKeyCreatedAt: "2025-01-01T00:00:00.000Z" });
+    await expect(
+      app.createOidcApplication(owner, orgId, {
+        name: "Late",
+        slug: "late",
+        redirectUris: ["https://late.example/callback"],
+      }),
+    ).rejects.toThrow(/90 days/);
+  });
+
+  it("keeps an append-only copy of audit events", async () => {
+    const { app, owner, orgId } = await org();
+    await app.inviteUser(owner, orgId, { email: "copy@a.test", name: "Copy" });
+    const sink = app.auditSink as { records: { event_id: string }[]; append: (event: { event_id: string }) => Promise<void> };
+    expect(sink.records.length).toBeGreaterThan(0);
+    await expect(sink.append(sink.records[0]!)).rejects.toThrow(/refuses rewrite/);
+  });
 });
 

@@ -52,7 +52,10 @@ describe("support access workflow", () => {
     expect(requested.status).toBe("requested");
     expect(requested.alerted).toBe(true);
 
-    const approved = approveSupport(requested, "owner-1", now, 60);
+    const first = approveSupport(requested, "owner-1", now, 60);
+    expect(first.status).toBe("pending_second");
+    expect(() => approveSupport(first, "owner-1", now, 60)).toThrow(/second person/);
+    const approved = approveSupport(first, "owner-2", now, 60);
     expect(approved.status).toBe("approved");
     expect(approved.expiresAt).toBeTruthy();
 

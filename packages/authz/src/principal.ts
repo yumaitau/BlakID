@@ -18,6 +18,7 @@ export type Principal = {
   organisationId: string | null;
   sessionId: string;
   supportGrant?: SupportGrant;
+  stepUpUntil?: string | null;
 };
 
 export class ForbiddenError extends Error {

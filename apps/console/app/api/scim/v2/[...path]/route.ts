@@ -1,8 +1,16 @@
 import { z } from "zod";
+import { sharedRateLimiter } from "@blakid/guard";
 import { scimUserToResource } from "@blakid/scim";
 import { getBlakID } from "../../../../../lib/blakid.ts";
 
 export const dynamic = "force-dynamic";
+
+function limited(request: Request): Response | null {
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
+  const hit = sharedRateLimiter().hit(`scim:${ip}`);
+  if (!hit.ok) return Response.json({ detail: "rate limit" }, { status: 429 });
+  return null;
+}
 
 function bearer(request: Request): string | null {
   const header = request.headers.get("authorization");
@@ -33,6 +41,8 @@ export async function GET(request: Request, context: { params: Promise<{ path: s
 }
 
 export async function POST(request: Request) {
+  const blocked = limited(request);
+  if (blocked) return blocked;
   const token = bearer(request);
   if (!token) return Response.json({ detail: "unauthorized" }, { status: 401 });
   const body = z

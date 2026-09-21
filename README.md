@@ -12,7 +12,7 @@ Possessing a BlakID never proves Aboriginal or Torres Strait Islander identity. 
 
 - Next.js 16, TypeScript, App Router, Tailwind, Zod
 - Control-plane metadata: PostgreSQL + Drizzle
-- Identity engine: pinned `ghcr.io/goauthentik/server:2026.8.3`
+- Identity engine: pinned `ghcr.io/goauthentik/server@sha256:ab9b4e8cc4ab3f8d1198d2db6aeea66bafea1963b3f2843589e0d163f97d9849` (tag 2026.8.3)
 - Dedicated authentik + PostgreSQL per organisation
 - Default region: AWS `ap-southeast-2` (Australia — Sydney)
 
@@ -48,6 +48,9 @@ docker compose -f infrastructure/docker/compose.yaml up -d control-plane-db
 - `/api/v1/organisations|users|groups|applications|roles|access-requests|service-accounts|agents|events|integrations|federation|webhooks|support-access|security`
 - `POST /api/mcp` (JSON-RPC `tools/list`, `tools/call`)
 - `/api/scim/v2/Users`
+- `POST /api/auth/passkey` phases `register-options`, `register-verify`, `step-up-options`, `step-up-verify`
+- `GET /api/v1/evidence` for an organisation administrator
+- Public disclosure: `/security`
 
 Audit export: `GET /api/v1/events?format=json|csv|syslog`
 

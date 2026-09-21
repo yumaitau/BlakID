@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { ImmutableAuditLog, toCsv, toSyslog, type AuditAction, type AuditEvent } from "@blakid/audit";
+import { AppendOnlyAuditSink, ImmutableAuditLog, toCsv, toSyslog, type AuditAction, type AuditEvent } from "@blakid/audit";
 import type { AuthentikUser, OidcApplication, SamlApplication } from "@blakid/authentik";
 import {
   authorize,
@@ -47,8 +47,10 @@ import {
   requestSupport,
   reviewSupport,
   startSupport,
+  SupportAccessError,
   type SupportAccessRequest,
 } from "@blakid/support-access";
+import { signingKeyExpired, vaultFromEnv, type KeyVault, type Sealed } from "@blakid/secrets";
 import type {
   AccessRequest,
   AgentAction,
@@ -65,6 +67,8 @@ export type BlakIDOptions = {
   ids?: () => string;
   now?: () => Date;
   fetch?: typeof fetch;
+  auditSink?: Pick<AppendOnlyAuditSink, "append">;
+  vault?: KeyVault;
 };
 
 function hashToken(token: string): string {
@@ -78,6 +82,8 @@ export class BlakID {
   readonly now: () => Date;
   readonly audit: ImmutableAuditLog;
   readonly fetch: typeof fetch;
+  readonly auditSink: Pick<AppendOnlyAuditSink, "append">;
+  readonly vault: KeyVault;
 
   constructor(options: BlakIDOptions) {
     this.store = options.store;
@@ -85,6 +91,8 @@ export class BlakID {
     this.ids = options.ids ?? (() => randomBytes(16).toString("hex"));
     this.now = options.now ?? (() => new Date());
     this.fetch = options.fetch ?? fetch;
+    this.auditSink = options.auditSink ?? new AppendOnlyAuditSink();
+    this.vault = options.vault ?? vaultFromEnv();
     this.audit = new ImmutableAuditLog(
       {
         append: (event) => this.store.appendAudit(event),
@@ -120,6 +128,7 @@ export class BlakID {
       result,
       metadata,
     });
+    await this.auditSink.append(event);
     await this.dispatchWebhooks(event).catch(() => undefined);
     return event;
   }
@@ -432,6 +441,7 @@ export class BlakID {
     ctx?: RequestContext,
   ): Promise<OidcApplication> {
     authorize(actor, "applications.write", organisationId);
+    await this.assertSigningKeyFresh(organisationId);
     const app = await this.client(organisationId).createOidcApplication({
       name: input.name,
       slug: input.slug,
@@ -628,9 +638,13 @@ export class BlakID {
     return { request: started, principal };
   }
 
-  async endSupportAccess(actor: Principal, requestId: string, ctx?: RequestContext) {
+  async endSupportAccess(actor: Principal, requestId: string, notes?: string, ctx?: RequestContext) {
     const request = await this.requireSupport(requestId);
-    const next = expireOrEnd(request, this.now(), "ended");
+    if (request.breakGlass && (!notes || notes.trim().length < 8)) {
+      throw new SupportAccessError("Break-glass cannot close until the session is reviewed");
+    }
+    const closed = expireOrEnd(request, this.now(), "ended");
+    const next = request.breakGlass && notes ? reviewSupport(closed, notes) : closed;
     await this.store.updateSupport(next);
     await this.record(
       actor,
@@ -923,6 +937,7 @@ export class BlakID {
     ctx?: RequestContext,
   ): Promise<SamlApplication> {
     authorize(actor, "applications.write", organisationId);
+    await this.assertSigningKeyFresh(organisationId);
     const app = await this.client(organisationId).createSamlApplication(input);
     await this.record(actor, organisationId, "application.created", "application", app.id, "success", ctx, {
       protocol: "saml",
@@ -1281,11 +1296,12 @@ export class BlakID {
     input: { url: string; secret: string; events: WebhookEventName[] },
   ) {
     authorize(actor, "organisation.settings.write", organisationId);
+    const sealed = await this.vault.encrypt(input.secret, this.now());
     return this.store.insertWebhook({
       id: this.ids(),
       organisationId,
       url: input.url,
-      secret: input.secret,
+      secret: `sealed:${JSON.stringify(sealed)}`,
       events: input.events,
       createdAt: this.now().toISOString(),
     });
@@ -1325,7 +1341,8 @@ export class BlakID {
         payload,
         createdAt: event.timestamp,
       });
-      delivery = await deliverOnce(endpoint, delivery, event.timestamp, this.fetch);
+      const secret = await this.openWebhookSecret(endpoint.secret);
+      delivery = await deliverOnce({ ...endpoint, secret }, delivery, event.timestamp, this.fetch);
       await this.store.updateDelivery(delivery);
     }
   }
@@ -1376,9 +1393,79 @@ export class BlakID {
 
   async ensureFederationKey(organisationId: string) {
     const existing = await this.store.getFederationKey(organisationId);
-    if (existing) return existing;
+    if (existing) return this.openFederationKey(existing);
     const generated = await generateFederationKeypair(organisationId, this.now().toISOString());
-    return this.store.upsertFederationKey(generated);
+    await this.store.upsertFederationKey(await this.sealFederationKey(generated));
+    return generated;
+  }
+
+  private async sealFederationKey(key: Awaited<ReturnType<typeof generateFederationKeypair>>) {
+    const sealed = await this.vault.encrypt(JSON.stringify(key.privateJwk), this.now());
+    return {
+      ...key,
+      privateJwk: { kty: "sealed", ciphertext: sealed.ciphertext, keyId: sealed.keyId } as typeof key.privateJwk,
+    };
+  }
+
+  private async openFederationKey(key: Awaited<ReturnType<typeof generateFederationKeypair>>) {
+    const raw = key.privateJwk as { kty?: string; ciphertext?: string; keyId?: string };
+    if (raw.kty !== "sealed" || !raw.ciphertext || !raw.keyId) return key;
+    const plaintext = await this.vault.decrypt({ ciphertext: raw.ciphertext, keyId: raw.keyId, createdAt: key.createdAt });
+    return { ...key, privateJwk: JSON.parse(plaintext) as typeof key.privateJwk };
+  }
+
+  private async openWebhookSecret(secret: string) {
+    if (!secret.startsWith("sealed:")) return secret;
+    return this.vault.decrypt(JSON.parse(secret.slice("sealed:".length)) as Sealed);
+  }
+
+  private async assertSigningKeyFresh(organisationId: string) {
+    const deployment = await this.store.getDeployment(organisationId);
+    if (signingKeyExpired(deployment?.signingKeyCreatedAt, this.now(), RETENTION.signingKeyMaxAgeDays)) {
+      throw new Error("Signing key is older than 90 days. Rotate it before creating applications.");
+    }
+  }
+
+  async evidencePack(actor: Principal, organisationId: string) {
+    authorize(actor, "audit.read", organisationId);
+    const [dashboard, administrators, sovereignty, support] = await Promise.all([
+      this.securityDashboard(actor, organisationId),
+      this.listAdministrators(actor, organisationId),
+      this.sovereignty(actor, organisationId),
+      this.store.listSupport(organisationId),
+    ]);
+    return {
+      generatedAt: this.now().toISOString(),
+      region: sovereignty.regionCode,
+      regionLabel: sovereignty.region,
+      authentikVersion: sovereignty.authentikVersion,
+      hostingModel: sovereignty.hostingModel,
+      backup: {
+        lastBackup: sovereignty.lastBackup,
+        status: sovereignty.lastBackupStatus,
+        restoreTest: sovereignty.restoreTest,
+        lastRestoreTest: sovereignty.lastRestoreTest,
+        location: sovereignty.backups,
+      },
+      administrators: administrators.map((member) => ({ email: member.email, role: member.role })),
+      identity: {
+        users: dashboard.users,
+        mfaCoverage: dashboard.mfaCoverage,
+        passkeyAdoption: dashboard.passkeyAdoption,
+        dormantAccounts: dashboard.dormantAccounts,
+        findings: dashboard.findings,
+      },
+      supportSessions: support.map((session) => ({
+        id: session.id,
+        status: session.status,
+        breakGlass: session.breakGlass,
+        reviewed: session.status === "reviewed",
+      })),
+      claims: {
+        indigenousIdentity: false,
+        certifications: [] as string[],
+      },
+    };
   }
 
   async federationJwks(actor: Principal, organisationId: string) {

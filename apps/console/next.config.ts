@@ -9,6 +9,8 @@ const nextConfig: NextConfig = {
     "@blakid/authentik",
     "@blakid/authz",
     "@blakid/config",
+    "@blakid/guard",
+    "@blakid/secrets",
     "@blakid/control-plane",
     "@blakid/federation",
     "@blakid/identity",
@@ -26,6 +28,7 @@ const nextConfig: NextConfig = {
       {
         source: "/:path*",
         headers: [
+          { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },

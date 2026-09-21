@@ -36,6 +36,22 @@ export default async function OrganisationSettings({ params }: { params: Promise
             <dd>{sov.backups}</dd>
           </div>
           <div className="flex justify-between">
+            <dt className="text-mute">Last backup</dt>
+            <dd>{sov.lastBackup ?? "pending"}</dd>
+          </div>
+          <div className="flex justify-between">
+            <dt className="text-mute">Backup status</dt>
+            <dd>{sov.lastBackupStatus ?? "unknown"}</dd>
+          </div>
+          <div className="flex justify-between">
+            <dt className="text-mute">Restore test</dt>
+            <dd>{sov.restoreTest ?? "not run"}</dd>
+          </div>
+          <div className="flex justify-between">
+            <dt className="text-mute">Last restore test</dt>
+            <dd>{sov.lastRestoreTest ?? "never"}</dd>
+          </div>
+          <div className="flex justify-between">
             <dt className="text-mute">Hostname</dt>
             <dd>{sov.hostname}</dd>
           </div>

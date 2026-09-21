@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sharedRateLimiter } from "@blakid/guard";
 import { isJsonRpc, MCP_TOOLS, mcpToolDescriptors } from "@blakid/mcp";
 import { getBlakID } from "../../../lib/blakid.ts";
 import { principalFromRequest } from "../../../lib/principal.ts";
@@ -10,6 +11,9 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
+  const hit = sharedRateLimiter().hit(`mcp:${ip}`);
+  if (!hit.ok) return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
   const principal = await principalFromRequest(request);
   if (!principal) return Response.json({ error: "unauthenticated" }, { status: 401 });
   const raw = await request.json();

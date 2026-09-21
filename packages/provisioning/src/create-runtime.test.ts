@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MemoryTenantRuntime } from "@blakid/control-plane";
 import { ComposeTenantRuntime } from "./compose-runtime.ts";
-import { createTenantRuntime, runtimeKindFromEnv } from "./create-runtime.ts";
+import { assertProductionRuntime, createTenantRuntime, runtimeKindFromEnv } from "./create-runtime.ts";
 
 describe("createTenantRuntime", () => {
   const ids = () => "id";
@@ -21,5 +21,17 @@ describe("createTenantRuntime", () => {
     });
     expect(compose.kind).toBe("compose");
     expect(compose.runtime).toBeInstanceOf(ComposeTenantRuntime);
+  });
+
+  it("refuses the memory engine in production", () => {
+    expect(() => assertProductionRuntime({ BLAKID_ENV: "production", BLAKID_RUNTIME: "memory" })).toThrow(
+      /memory identity engine/,
+    );
+    expect(() =>
+      assertProductionRuntime({ BLAKID_ENV: "production", BLAKID_RUNTIME: "compose", BLAKID_DEFAULT_REGION: "us-east-1" }),
+    ).toThrow(/ap-southeast-2/);
+    expect(() =>
+      assertProductionRuntime({ BLAKID_ENV: "production", BLAKID_RUNTIME: "compose", BLAKID_DEFAULT_REGION: "ap-southeast-2" }),
+    ).not.toThrow();
   });
 });

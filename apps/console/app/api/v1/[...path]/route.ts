@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { StepUpRequired, assertStepUp, privilegedAction, sharedRateLimiter } from "@blakid/guard";
 import { CATALOGUE } from "@blakid/integrations";
 import { ForbiddenError, TenantIsolationError } from "@blakid/authz";
 import { getBlakID } from "../../../../lib/blakid.ts";
@@ -19,6 +20,19 @@ async function handle(request: Request, params: Params) {
   const orgId = url.searchParams.get("organisationId") ?? (await request.clone().json().catch(() => ({}))).organisationId;
   const ctx = requestContext(request);
   const app = getBlakID();
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
+  if (request.method === "POST" && (resource === "users" || resource === "federation" || resource === "mcp")) {
+    const limited = sharedRateLimiter().hit(`${resource}:${ip}`);
+    if (!limited.ok) return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
+  }
+  if (principal) {
+    try {
+      assertStepUp(privilegedAction({ resource, id, extra, method: request.method }), principal.stepUpUntil, new Date());
+    } catch (error) {
+      if (error instanceof StepUpRequired) return Response.json({ error: error.message, code: error.code }, { status: 403 });
+      throw error;
+    }
+  }
 
   if (!principal && resource !== "integrations" && !(resource === "invitations" && id === "accept")) {
     return Response.json({ error: "unauthenticated" }, { status: 401 });
@@ -460,7 +474,11 @@ async function handle(request: Request, params: Params) {
       return Response.json(await app.startSupportAccess(principal!, id, ctx));
     }
     if (resource === "support-access" && id && extra === "end" && request.method === "POST") {
-      return Response.json(await app.endSupportAccess(principal!, id, ctx));
+      const body = z.object({ notes: z.string().optional() }).parse(await request.json().catch(() => ({})));
+      return Response.json(await app.endSupportAccess(principal!, id, body.notes, ctx));
+    }
+    if (resource === "evidence" && request.method === "GET") {
+      return Response.json(await app.evidencePack(principal!, organisationId!));
     }
 
     return Response.json({ error: "not found" }, { status: 404 });

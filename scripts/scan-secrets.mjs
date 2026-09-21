@@ -9,6 +9,7 @@ const patterns = [
   "client_secret:\\s*[\"'](?!.*csecret)",
 ];
 
+const history = process.argv.includes("--history");
 const files = execSync("git ls-files", { encoding: "utf8" })
   .trim()
   .split("\n")
@@ -35,5 +36,36 @@ for (const file of files) {
   }
 }
 
+if (history) {
+  let revs = "";
+  try {
+    revs = execSync("git rev-list --all", { encoding: "utf8" }).trim().split("\n").filter(Boolean).join(" ");
+  } catch {
+    revs = "";
+  }
+  if (revs) {
+    for (const pattern of ["BEGIN PRIVATE KEY", "BEGIN RSA PRIVATE KEY", "AWS_SECRET_ACCESS_KEY"]) {
+      try {
+        const hits = execSync(`git grep -I -n -e ${JSON.stringify(pattern)} ${revs}`, {
+          encoding: "utf8",
+          maxBuffer: 20_000_000,
+        });
+        const lines = hits.split("\n").filter((line) => {
+          if (!line) return false;
+          if (line.includes("scan-secrets.mjs")) return false;
+          if (line.includes("change-me") || line.includes("not-for-production")) return false;
+          return true;
+        });
+        if (lines.length) {
+          console.error(`history match for ${pattern}: ${lines.slice(0, 5).join(" | ")}`);
+          failed = true;
+        }
+      } catch {
+        // git grep exits 1 when nothing matches
+      }
+    }
+  }
+}
+
 if (failed) process.exit(1);
-console.log("secret scan clean");
+console.log(history ? "secret scan clean (tree and history)" : "secret scan clean");

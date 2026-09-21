@@ -32,7 +32,7 @@ services:
       retries: 20
 
   server:
-    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server:2026.8.3}
+    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server@sha256:ab9b4e8cc4ab3f8d1198d2db6aeea66bafea1963b3f2843589e0d163f97d9849}
     restart: unless-stopped
     command: server
     environment:
@@ -64,7 +64,7 @@ services:
       retries: 30
 
   worker:
-    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server:2026.8.3}
+    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server@sha256:ab9b4e8cc4ab3f8d1198d2db6aeea66bafea1963b3f2843589e0d163f97d9849}
     restart: unless-stopped
     command: worker
     environment:

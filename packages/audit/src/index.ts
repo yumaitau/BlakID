@@ -1,3 +1,6 @@
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+
 export const AUDIT_ACTIONS = [
   "identity.login.success",
   "identity.login.failed",
@@ -138,6 +141,32 @@ export function toCsv(events: AuditEvent[]): string {
 function csvEscape(value: string): string {
   if (/[",\n]/.test(value)) return `"${value.replaceAll('"', '""')}"`;
   return value;
+}
+
+/** Write-once audit copy. A second write of the same event id is rejected. */
+export class AppendOnlyAuditSink {
+  readonly records: AuditEvent[] = [];
+  private readonly seen = new Set<string>();
+
+  async append(event: AuditEvent): Promise<void> {
+    if (this.seen.has(event.event_id)) {
+      throw new Error("Audit sink refuses rewrite");
+    }
+    this.seen.add(event.event_id);
+    this.records.push(Object.freeze({ ...event }));
+  }
+}
+
+export class FileAuditSink extends AppendOnlyAuditSink {
+  constructor(private readonly dir: string) {
+    super();
+    mkdirSync(dir, { recursive: true });
+  }
+
+  override async append(event: AuditEvent): Promise<void> {
+    await super.append(event);
+    appendFileSync(join(this.dir, "audit.jsonl"), `${JSON.stringify(event)}\n`, { flag: "a" });
+  }
 }
 
 export class MemoryAuditStore implements AuditStore {

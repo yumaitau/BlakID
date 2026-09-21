@@ -1,6 +1,9 @@
 /** Single pin for upstream authentik. Never float a latest tag in production. */
 export const AUTHENTIK_VERSION = "2026.8.3";
-export const AUTHENTIK_IMAGE = `ghcr.io/goauthentik/server:${AUTHENTIK_VERSION}`;
+/** Multi-arch index digest for ghcr.io/goauthentik/server:2026.8.3. */
+export const AUTHENTIK_IMAGE_DIGEST =
+  "sha256:ab9b4e8cc4ab3f8d1198d2db6aeea66bafea1963b3f2843589e0d163f97d9849";
+export const AUTHENTIK_IMAGE = `ghcr.io/goauthentik/server@${AUTHENTIK_IMAGE_DIGEST}`;
 export const POSTGRES_IMAGE = "postgres:16-alpine";
 export const REDIS_IMAGE = "redis:7-alpine";
 
@@ -36,6 +39,8 @@ export const RETENTION = {
   accessTokenMinutes: 10,
   refreshTokenDays: 1,
   sessionHours: 12,
+  signingKeyMaxAgeDays: 90,
+  stepUpMinutes: 10,
 } as const;
 
 export const HOSTING_MODELS = [
