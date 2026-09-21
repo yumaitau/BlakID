@@ -293,6 +293,48 @@ async function handle(request: Request, params: Params) {
         .parse(await request.json());
       return Response.json(await app.createTrust(principal!, organisationId!, body, ctx), { status: 201 });
     }
+    if (resource === "federation" && id === "jwks" && request.method === "GET") {
+      return Response.json(await app.federationJwks(principal!, organisationId!));
+    }
+    if (resource === "federation" && id === "assertions" && extra === "verify" && request.method === "POST") {
+      const body = z.object({ token: z.string() }).parse(await request.json());
+      return Response.json(await app.consumeFederationAssertion(principal!, organisationId!, body.token));
+    }
+    if (resource === "federation" && id === "assertions" && request.method === "POST") {
+      const body = z
+        .object({
+          audienceOrgId: z.string(),
+          subject: z.string(),
+          name: z.string().optional(),
+          attributes: z.array(
+            z.object({
+              attribute: z.string(),
+              value: z.unknown(),
+              issuer: z.string(),
+              issued_at: z.string(),
+              expires_at: z.string().nullable(),
+              assurance: z.enum(["organisation_verified", "self_asserted", "federated"]),
+            }),
+          ),
+        })
+        .parse(await request.json());
+      return Response.json(await app.issueFederationAssertion(principal!, organisationId!, body, ctx), { status: 201 });
+    }
+    if (resource === "agents" && request.method === "POST") {
+      const body = z
+        .object({
+          name: z.string(),
+          email: z.string().email(),
+          ownerId: z.string(),
+          purpose: z.string(),
+          modelProvider: z.string(),
+          permittedApplications: z.array(z.string()),
+          allowedActions: z.array(z.string()),
+          expiresAt: z.string().nullable().optional(),
+        })
+        .parse(await request.json());
+      return Response.json(await app.createHermesAgent(principal!, organisationId!, body, ctx), { status: 201 });
+    }
     if (resource === "federation" && id === "evaluate" && request.method === "POST") {
       const body = z
         .object({
@@ -371,6 +413,10 @@ async function handle(request: Request, params: Params) {
         const csv = await app.exportEvents(principal!, organisationId!, "csv");
         return new Response(csv, { headers: { "Content-Type": "text/csv" } });
       }
+      if (format === "syslog") {
+        const syslog = await app.exportEvents(principal!, organisationId!, "syslog");
+        return new Response(syslog, { headers: { "Content-Type": "text/plain" } });
+      }
       return Response.json(await app.listEvents(principal!, organisationId!));
     }
 
@@ -382,6 +428,9 @@ async function handle(request: Request, params: Params) {
       return Response.json(await app.passkeyEnrolment(principal!, organisationId!));
     }
 
+    if (resource === "support-access" && request.method === "GET" && !id) {
+      return Response.json(await app.listSupportAccess(principal!, organisationId!));
+    }
     if (resource === "support-access" && request.method === "POST" && !id) {
       const body = z
         .object({

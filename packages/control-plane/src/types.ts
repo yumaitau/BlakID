@@ -2,7 +2,7 @@ import type { AuditEvent } from "@blakid/audit";
 import type { AuthentikClient, OidcApplication } from "@blakid/authentik";
 import type { Principal, Role } from "@blakid/authz";
 import type { HostingModel } from "@blakid/config";
-import type { TrustPolicy } from "@blakid/federation";
+import type { FederationKeypair, TrustPolicy } from "@blakid/federation";
 import type { SupportAccessRequest } from "@blakid/support-access";
 import type { WebhookDelivery, WebhookEndpoint } from "@blakid/webhooks";
 
@@ -167,6 +167,8 @@ export interface BlakIDStore {
   insertScimCredential(credential: InboundScimCredential): Promise<InboundScimCredential>;
   getScimCredentialByTokenHash(hash: string): Promise<InboundScimCredential | null>;
   listScimCredentials(organisationId: string): Promise<InboundScimCredential[]>;
+  upsertFederationKey(key: FederationKeypair): Promise<FederationKeypair>;
+  getFederationKey(organisationId: string): Promise<FederationKeypair | null>;
 }
 
 export type ProvisionInput = {

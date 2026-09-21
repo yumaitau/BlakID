@@ -11,6 +11,12 @@ export default async function EventsPage({ params }: { params: Promise<{ org: st
   if (!org) return null;
   const events = await getBlakID().listEvents(principal, org.id);
   return (
+    <div className="space-y-4">
+      <p className="text-xs text-mute">
+        Export: <a className="text-sand" href="/api/v1/events?format=json">JSON</a> ·{" "}
+        <a className="text-sand" href="/api/v1/events?format=csv">CSV</a> ·{" "}
+        <a className="text-sand" href="/api/v1/events?format=syslog">syslog</a>
+      </p>
     <div className="rounded-2xl border border-white/5 bg-surface overflow-x-auto">
       <table className="w-full text-xs">
         <thead className="text-mute text-left">
@@ -36,6 +42,7 @@ export default async function EventsPage({ params }: { params: Promise<{ org: st
           ))}
         </tbody>
       </table>
+    </div>
     </div>
   );
 }

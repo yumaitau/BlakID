@@ -112,7 +112,60 @@ export default function FederationPage() {
           </li>
         ))}
       </ul>
-      {message ? <p className="text-sand text-sm">{message}</p> : null}
+      <form
+        onSubmit={async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const response = await fetch("/api/v1/federation/assertions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              audienceOrgId: form.get("audienceOrgId"),
+              subject: form.get("subject"),
+              name: form.get("subjectName") || undefined,
+              attributes: [
+                {
+                  attribute: "email",
+                  value: form.get("subject"),
+                  issuer: form.get("issuer") || "this organisation",
+                  issued_at: new Date().toISOString(),
+                  expires_at: null,
+                  assurance: "organisation_verified",
+                },
+              ],
+            }),
+          });
+          const data = await response.json();
+          setMessage(response.ok ? data.token : data.error);
+        }}
+        className="rounded-2xl bg-surface border border-white/5 p-6 space-y-3"
+      >
+        <h2 className="font-[family-name:var(--font-display)] text-2xl">Issue signed assertion</h2>
+        <input name="audienceOrgId" placeholder="Audience organisation id" className="w-full rounded-xl bg-raised px-3 py-2" required />
+        <input name="subject" placeholder="Subject email" className="w-full rounded-xl bg-raised px-3 py-2" required />
+        <input name="subjectName" placeholder="Name" className="w-full rounded-xl bg-raised px-3 py-2" />
+        <input name="issuer" placeholder="Issuer display name" className="w-full rounded-xl bg-raised px-3 py-2" />
+        <button className="rounded-full bg-primary px-5 py-2 text-sm">Sign assertion</button>
+      </form>
+      <form
+        onSubmit={async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const response = await fetch("/api/v1/federation/assertions/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: form.get("token") }),
+          });
+          const data = await response.json();
+          setMessage(JSON.stringify(data, null, 2));
+        }}
+        className="rounded-2xl bg-surface border border-white/5 p-6 space-y-3"
+      >
+        <h2 className="font-[family-name:var(--font-display)] text-2xl">Verify peer assertion</h2>
+        <textarea name="token" rows={4} className="w-full rounded-xl bg-raised px-3 py-2 font-mono text-xs" required />
+        <button className="rounded-full bg-primary px-5 py-2 text-sm">Verify</button>
+      </form>
+      {message ? <pre className="text-sand text-xs whitespace-pre-wrap break-all">{message}</pre> : null}
     </div>
   );
 }

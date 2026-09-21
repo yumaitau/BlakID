@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ImmutableAuditLog, MemoryAuditStore, toCsv } from "./index.ts";
+import { ImmutableAuditLog, MemoryAuditStore, toCsv, toSyslog } from "./index.ts";
 
 describe("immutable audit log", () => {
   it("persists required fields and refuses duplicates", async () => {
@@ -30,5 +30,7 @@ describe("immutable audit log", () => {
     expect(event.result).toBe("success");
     await expect(log.record({ ...event })).rejects.toThrow(/immutable/);
     expect(toCsv([event])).toContain("identity.suspended");
+    expect(toSyslog([event])).toContain('org="org-a"');
+    expect(toSyslog([event])).toContain("identity.suspended");
   });
 });

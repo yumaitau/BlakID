@@ -51,3 +51,22 @@ export function mcpTool(name: string): McpTool | undefined {
 export function writeRequiresApproval(name: string): boolean {
   return mcpTool(name)?.requiresApproval === true;
 }
+
+export type JsonRpcRequest = {
+  jsonrpc: "2.0";
+  id?: string | number | null;
+  method: string;
+  params?: { name?: string; arguments?: Record<string, unknown> };
+};
+
+export function mcpToolDescriptors() {
+  return MCP_TOOLS.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: { type: "object", additionalProperties: true },
+  }));
+}
+
+export function isJsonRpc(body: unknown): body is JsonRpcRequest {
+  return Boolean(body && typeof body === "object" && (body as JsonRpcRequest).jsonrpc === "2.0");
+}

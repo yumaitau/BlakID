@@ -36,6 +36,22 @@ export default function AccessPage() {
     void reload();
   }
 
+  async function create(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await fetch("/api/v1/access-requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        applicationId: form.get("applicationId"),
+        requestedRole: form.get("requestedRole"),
+        justification: form.get("justification"),
+        expiresAt: form.get("expiresAt") || null,
+      }),
+    });
+    void reload();
+  }
+
   return (
     <div className="grid grid-cols-2 gap-6">
       <section className="rounded-2xl bg-surface border border-white/5 p-6">
@@ -48,6 +64,13 @@ export default function AccessPage() {
       </section>
       <section className="rounded-2xl bg-surface border border-white/5 p-6">
         <h2 className="text-sand text-sm uppercase tracking-[0.16em]">Access requests</h2>
+        <form onSubmit={create} className="mt-4 space-y-2">
+          <input name="applicationId" placeholder="Application id" className="w-full rounded-xl bg-raised px-3 py-2" required />
+          <input name="requestedRole" placeholder="Requested role" className="w-full rounded-xl bg-raised px-3 py-2" required />
+          <input name="justification" placeholder="Reason" className="w-full rounded-xl bg-raised px-3 py-2" required />
+          <input name="expiresAt" type="datetime-local" className="w-full rounded-xl bg-raised px-3 py-2" />
+          <button className="rounded-full bg-primary px-4 py-2 text-xs">Request temporary access</button>
+        </form>
         <ul className="mt-4 text-sm space-y-3">
           {requests.length === 0 ? <li className="text-mute">None pending.</li> : null}
           {requests.map((r) => (

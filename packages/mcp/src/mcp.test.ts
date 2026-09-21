@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MCP_TOOLS, writeRequiresApproval } from "./index.ts";
+import { isJsonRpc, mcpToolDescriptors, MCP_TOOLS, writeRequiresApproval } from "./index.ts";
 
 describe("BlakID MCP tools", () => {
   it("lists the initial read and write tools", () => {
@@ -15,4 +15,10 @@ describe("BlakID MCP tools", () => {
     expect(writeRequiresApproval("blakid_invite_user")).toBe(true);
     expect(writeRequiresApproval("blakid_revoke_session")).toBe(true);
   });
+
+  it("describes tools for MCP JSON-RPC", () => {
+    expect(isJsonRpc({ jsonrpc: "2.0", method: "tools/list", id: 1 })).toBe(true);
+    expect(mcpToolDescriptors().some((t) => t.name === "blakid_suspend_user")).toBe(true);
+  });
 });
+

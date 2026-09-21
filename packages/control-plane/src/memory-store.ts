@@ -1,5 +1,5 @@
 import type { AuditEvent } from "@blakid/audit";
-import type { TrustPolicy } from "@blakid/federation";
+import type { FederationKeypair, TrustPolicy } from "@blakid/federation";
 import type { SupportAccessRequest } from "@blakid/support-access";
 import type { WebhookDelivery, WebhookEndpoint } from "@blakid/webhooks";
 import type {
@@ -26,6 +26,7 @@ export class MemoryStore implements BlakIDStore {
   trusts = new Map<string, TrustPolicy>();
   agentActions = new Map<string, AgentAction>();
   scimCredentials = new Map<string, InboundScimCredential>();
+  federationKeys = new Map<string, FederationKeypair>();
 
   async insertOrganisation(org: Organisation) {
     if ([...this.organisations.values()].some((o) => o.slug === org.slug)) {
@@ -173,5 +174,12 @@ export class MemoryStore implements BlakIDStore {
   }
   async listScimCredentials(organisationId: string) {
     return [...this.scimCredentials.values()].filter((c) => c.organisationId === organisationId);
+  }
+  async upsertFederationKey(key: FederationKeypair) {
+    this.federationKeys.set(key.organisationId, key);
+    return key;
+  }
+  async getFederationKey(organisationId: string) {
+    return this.federationKeys.get(organisationId) ?? null;
   }
 }

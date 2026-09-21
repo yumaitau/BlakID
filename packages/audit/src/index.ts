@@ -85,6 +85,16 @@ export class ImmutableAuditLog {
   }
 }
 
+export function toSyslog(events: AuditEvent[], host = "blakid"): string {
+  return events
+    .map((event) => {
+      const ts = event.timestamp.replace(/\.\d+Z$/, "Z");
+      const msg = `${event.action} ${event.target_type}=${event.target_id} result=${event.result}`;
+      return `<134>1 ${ts} ${host} blakid - ${event.event_id} [blakid org="${event.organisation_id}" actor="${event.actor_id}"] ${msg}`;
+    })
+    .join("\n");
+}
+
 export function toCsv(events: AuditEvent[]): string {
   const header = [
     "event_id",

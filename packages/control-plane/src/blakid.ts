@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { ImmutableAuditLog, toCsv, type AuditAction, type AuditEvent } from "@blakid/audit";
+import { ImmutableAuditLog, toCsv, toSyslog, type AuditAction, type AuditEvent } from "@blakid/audit";
 import type { AuthentikUser, OidcApplication, SamlApplication } from "@blakid/authentik";
 import {
   authorize,
@@ -16,7 +16,13 @@ import {
   TENANT_HOST_SUFFIX,
   type HostingModel,
 } from "@blakid/config";
-import { evaluateAssertions } from "@blakid/federation";
+import {
+  evaluateAssertions,
+  generateFederationKeypair,
+  peekFederationIssuer,
+  signFederationAssertion,
+  verifyFederationAssertion,
+} from "@blakid/federation";
 import {
   assertNotIndigenousIdentityClaim,
   transition,
@@ -506,11 +512,21 @@ export class BlakID {
     return this.store.listAudit(organisationId);
   }
 
-  async exportEvents(actor: Principal, organisationId: string, format: "json" | "csv") {
+  async exportEvents(actor: Principal, organisationId: string, format: "json" | "csv" | "syslog") {
     authorize(actor, "audit.export", organisationId);
     const events = await this.store.listAudit(organisationId);
     if (format === "csv") return toCsv(events);
+    if (format === "syslog") return toSyslog(events);
     return JSON.stringify(events, null, 2);
+  }
+
+  async listSupportAccess(actor: Principal, organisationId: string) {
+    if (actor.role === "YUMA_PLATFORM_OPERATOR") {
+      authorize(actor, "support.request", null);
+    } else {
+      authorize(actor, "support.approve", organisationId);
+    }
+    return this.store.listSupport(organisationId);
   }
 
   async requestSupportAccess(
@@ -1135,6 +1151,67 @@ export class BlakID {
     return user;
   }
 
+  async createHermesAgent(
+    actor: Principal,
+    organisationId: string,
+    input: {
+      name: string;
+      email: string;
+      ownerId: string;
+      purpose: string;
+      modelProvider: string;
+      permittedApplications: string[];
+      allowedActions: string[];
+      expiresAt?: string | null;
+    },
+    ctx?: RequestContext,
+  ) {
+    const agent = await this.createServiceIdentity(
+      actor,
+      organisationId,
+      {
+        kind: "ai_agent",
+        email: input.email,
+        name: input.name,
+        ownerId: input.ownerId,
+        purpose: input.purpose,
+        expiresAt: input.expiresAt,
+        permittedApplications: input.permittedApplications,
+        modelProvider: input.modelProvider,
+      },
+      ctx,
+    );
+    await this.client(organisationId).updateUser(agent.id, {
+      attributes: {
+        ...agent.attributes,
+        blakid_inherit_human_credentials: false,
+        blakid_allowed_actions: input.allowedActions,
+        blakid_delegated_from: input.ownerId,
+      },
+    });
+    const slug = `hermes-${this.ids().slice(0, 10).toLowerCase()}`;
+    const oidc = await this.createOidcApplication(
+      actor,
+      organisationId,
+      {
+        name: `${input.name} client`,
+        slug,
+        redirectUris: ["https://hermes.blakid.internal/callback"],
+      },
+      ctx,
+    );
+    const refreshed = await this.client(organisationId).getUser(agent.id);
+    return {
+      agent: refreshed,
+      credentials: {
+        clientId: oidc.clientId,
+        clientSecret: oidc.clientSecret,
+        tokenUrl: oidc.tokenUrl,
+        grant: "client_credentials",
+      },
+    };
+  }
+
   async securityDashboard(actor: Principal, organisationId: string) {
     authorize(actor, "audit.read", organisationId);
     const users = await this.client(organisationId).listUsers();
@@ -1263,6 +1340,9 @@ export class BlakID {
     if (input.peerOrganisationId === organisationId) {
       throw new Error("An organisation cannot create a universal trust with itself as global authority");
     }
+    if (input.peerOrganisationId === "*" || input.peerOrganisationId === "global") {
+      throw new Error("There is no universal global trust relationship");
+    }
     const policy = await this.store.insertTrust({
       id: this.ids(),
       organisationId,
@@ -1292,6 +1372,62 @@ export class BlakID {
   async listTrusts(actor: Principal, organisationId: string) {
     authorize(actor, "identity.users.read", organisationId);
     return this.store.listTrusts(organisationId);
+  }
+
+  async ensureFederationKey(organisationId: string) {
+    const existing = await this.store.getFederationKey(organisationId);
+    if (existing) return existing;
+    const generated = await generateFederationKeypair(organisationId, this.now().toISOString());
+    return this.store.upsertFederationKey(generated);
+  }
+
+  async federationJwks(actor: Principal, organisationId: string) {
+    authorize(actor, "applications.read", organisationId);
+    const key = await this.ensureFederationKey(organisationId);
+    return { keys: [key.publicJwk] };
+  }
+
+  async issueFederationAssertion(
+    actor: Principal,
+    organisationId: string,
+    input: { audienceOrgId: string; subject: string; name?: string; attributes: AttributeAssertion[] },
+    ctx?: RequestContext,
+  ) {
+    authorize(actor, "identity.users.read", organisationId);
+    const key = await this.ensureFederationKey(organisationId);
+    const token = await signFederationAssertion(key, {
+      audienceOrgId: input.audienceOrgId,
+      subject: input.subject,
+      name: input.name,
+      attributes: input.attributes,
+      now: this.now(),
+    });
+    await this.record(actor, organisationId, "federation.assertion.issued", "identity", input.subject, "success", ctx, {
+      audienceOrgId: input.audienceOrgId,
+    });
+    return { token, issuer: organisationId, audience: input.audienceOrgId };
+  }
+
+  async consumeFederationAssertion(actor: Principal, organisationId: string, token: string) {
+    authorize(actor, "identity.users.read", organisationId);
+    const issuer = peekFederationIssuer(token);
+    if (issuer === organisationId) {
+      throw new Error("Federation assertions are for peer organisations");
+    }
+    const policy = await this.store.getTrust(organisationId, issuer);
+    if (!policy) {
+      throw new Error("No explicit trust relationship with the issuing organisation");
+    }
+    const issuerKey = await this.store.getFederationKey(issuer);
+    if (!issuerKey) throw new Error("Issuing organisation has no federation signing key");
+    const payload = await verifyFederationAssertion(token, organisationId, issuerKey);
+    const decisions = evaluateAssertions(policy, payload.attributes);
+    await this.record(actor, organisationId, "federation.assertion.consumed", "identity", payload.sub, "success", undefined, {
+      issuer,
+      accepted: decisions.filter((d) => d.accepted).map((d) => d.attribute),
+      rejected: decisions.filter((d) => !d.accepted).map((d) => d.attribute),
+    });
+    return { payload, decisions };
   }
 
   async createAgentAction(

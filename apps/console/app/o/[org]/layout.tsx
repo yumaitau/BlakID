@@ -20,6 +20,7 @@ export default async function OrgLayout({
       nav={[
         { href: base, label: "Overview" },
         { href: `${base}/people`, label: "People" },
+        { href: `${base}/services`, label: "Service identities" },
         { href: `${base}/applications`, label: "Applications" },
         { href: `${base}/applications/catalogue`, label: "App catalogue" },
         { href: `${base}/access`, label: "Access" },

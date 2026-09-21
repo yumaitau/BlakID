@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { getBlakID } from "../../../../lib/blakid.ts";
 import { unsealPrincipal } from "../../../../lib/session.ts";
 import { Panel, Shell, Stat } from "../../../../components/shell.tsx";
+import { RequestSupport } from "./request-support.tsx";
 
 export default async function OrganisationDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -39,12 +40,12 @@ export default async function OrganisationDetail({ params }: { params: Promise<{
             <Row label="Encryption" value={String(sov.encryption)} />
           </dl>
         </Panel>
-        <Panel title="Operator boundary">
-          <p className="text-sm text-mute leading-relaxed">
+        <Panel title="Just-in-time support">
+          <p className="text-sm text-mute leading-relaxed mb-4">
             Platform operators may patch infrastructure, monitor health, run backups and respond to incidents.
-            They cannot impersonate users, read credentials, change memberships or grant application access
-            unless the organisation approves a time-boxed support session.
+            Identity access requires a customer-approved, expiring session.
           </p>
+          <RequestSupport organisationId={id} />
         </Panel>
       </div>
     </Shell>

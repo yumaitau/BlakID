@@ -258,4 +258,108 @@ describe("Milestone 2-4 control plane", () => {
     ]);
     expect(unknown[0]?.accepted).toBe(false);
   });
+
+  it("issues and consumes signed pairwise assertions", async () => {
+    const ctx = system();
+    const operator = createTestPrincipal({ role: "YUMA_PLATFORM_OPERATOR", organisationId: null });
+    const a = await ctx.app.provisionOrganisation(operator, {
+      name: "Wiradjuri Example Corporation",
+      slug: "wiradjuri",
+      adminEmail: "owner@wiradjuri.test",
+      adminName: "Owner A",
+    });
+    const b = await ctx.app.provisionOrganisation(operator, {
+      name: "Partner Organisation",
+      slug: "partner",
+      adminEmail: "owner@partner.test",
+      adminName: "Owner B",
+    });
+    const ownerA = createTestPrincipal({
+      role: "ORGANISATION_OWNER",
+      organisationId: a.organisation.id,
+      actorId: a.invitation.userId,
+    });
+    const ownerB = createTestPrincipal({
+      role: "ORGANISATION_OWNER",
+      organisationId: b.organisation.id,
+      actorId: b.invitation.userId,
+    });
+    await ctx.app.createTrust(ownerB, b.organisation.id, {
+      peerOrganisationId: a.organisation.id,
+      peerName: "Wiradjuri Example Corporation",
+      acceptAttributes: ["email", "identity"],
+      rejectAttributes: ["administrator_role"],
+    });
+    await expect(
+      ctx.app.createTrust(ownerB, b.organisation.id, {
+        peerOrganisationId: "global",
+        peerName: "Everyone",
+        acceptAttributes: ["email"],
+        rejectAttributes: [],
+      }),
+    ).rejects.toThrow(/universal global trust/);
+    const issued = await ctx.app.issueFederationAssertion(ownerA, a.organisation.id, {
+      audienceOrgId: b.organisation.id,
+      subject: "josh@wiradjuri.test",
+      name: "Josh",
+      attributes: [
+        {
+          attribute: "email",
+          value: "josh@wiradjuri.test",
+          issuer: "Wiradjuri Example Corporation",
+          issued_at: "2026-09-22T05:00:00.000Z",
+          expires_at: null,
+          assurance: "organisation_verified",
+        },
+        {
+          attribute: "administrator_role",
+          value: true,
+          issuer: "Wiradjuri Example Corporation",
+          issued_at: "2026-09-22T05:00:00.000Z",
+          expires_at: null,
+          assurance: "organisation_verified",
+        },
+      ],
+    });
+    const consumed = await ctx.app.consumeFederationAssertion(ownerB, b.organisation.id, issued.token);
+    expect(consumed.payload.sub).toBe("josh@wiradjuri.test");
+    expect(consumed.decisions.find((d) => d.attribute === "email")?.accepted).toBe(true);
+    expect(consumed.decisions.find((d) => d.attribute === "administrator_role")?.accepted).toBe(false);
+    await expect(ctx.app.consumeFederationAssertion(ownerA, a.organisation.id, issued.token)).rejects.toThrow(
+      /peer organisations|No explicit trust/,
+    );
+  });
+
+  it("gives Hermes agents their own credentials", async () => {
+    const { app, owner, orgId, runtime } = await org();
+    const hermes = await app.createHermesAgent(owner, orgId, {
+      name: "Hermes Agent",
+      email: "hermes@a.test",
+      ownerId: owner.actorId,
+      purpose: "RangerOS lookups",
+      modelProvider: "grok",
+      permittedApplications: ["rangeros"],
+      allowedActions: ["blakid_list_users"],
+    });
+    expect(hermes.agent.kind).toBe("ai_agent");
+    expect(hermes.agent.attributes.blakid_inherit_human_credentials).toBe(false);
+    expect(hermes.credentials.grant).toBe("client_credentials");
+    expect(hermes.credentials.clientSecret).toBeTruthy();
+    const memory = runtime.memory(orgId);
+    await expect(memory.authenticatePassword("hermes@a.test", "correct-horse-battery")).rejects.toThrow();
+    const syslog = await app.exportEvents(owner, orgId, "syslog");
+    expect(syslog).toContain("blakid");
+    expect(syslog).toContain(orgId);
+  });
+
+  it("lists support-access requests for customer approval", async () => {
+    const { app, owner, orgId, operator } = await org();
+    const support = await app.requestSupportAccess(operator, orgId, {
+      reason: "Investigate failed RangerOS logins",
+      scopes: ["identity.users.read", "audit.read"],
+    });
+    const listed = await app.listSupportAccess(owner, orgId);
+    expect(listed.some((s) => s.id === support.id && s.status === "requested")).toBe(true);
+  });
 });
+
