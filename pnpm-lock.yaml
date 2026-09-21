@@ -170,6 +170,9 @@ importers:
       '@blakid/webhooks':
         specifier: workspace:*
         version: link:../webhooks
+      jose:
+        specifier: ^6.1.0
+        version: 6.2.12
 
   packages/database:
     dependencies:

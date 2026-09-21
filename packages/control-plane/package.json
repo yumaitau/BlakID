@@ -17,6 +17,7 @@
     "@blakid/mcp": "workspace:*",
     "@blakid/scim": "workspace:*",
     "@blakid/support-access": "workspace:*",
-    "@blakid/webhooks": "workspace:*"
+    "@blakid/webhooks": "workspace:*",
+    "jose": "^6.1.0"
   }
 }
