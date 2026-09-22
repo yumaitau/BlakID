@@ -11,9 +11,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Version comes from package.json "packageManager". Do not also pass version.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -33,32 +32,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
       - id: pin
-        run: node -e "const fs=require('fs'); const t=fs.readFileSync('packages/config/src/index.ts','utf8'); const d=t.match(/sha256:[a-f0-9]{64}/)[0]; console.log('digest='+d)" >> "$GITHUB_OUTPUT"
-      - uses: aquasecurity/trivy-action@0.28.0
+        run: node -e "const fs=require('fs'); const t=fs.readFileSync('packages/config/src/index.ts','utf8'); const d=t.match(/sha256:[a-f0-9]{64}/)[0]; fs.appendFileSync(process.env.GITHUB_OUTPUT, 'digest='+d+'\n')"
+      # v0.36.0 commit. Immutable release. Do not use a floating tag.
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: ghcr.io/goauthentik/server@${{ steps.pin.outputs.digest }}
           format: table
-          exit-code: 1
+          exit-code: "1"
           severity: CRITICAL
           ignore-unfixed: true
 
   integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -66,5 +59,3 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: docker info
       - run: pnpm test:integration
-        env:
-          BLAKID_DOCKER_HOST: ""
