@@ -1,0 +1,3 @@
+# Inside pinned authentik 2026.8.3 (anyio 4.14.1). Fixed in anyio 4.14.2.
+# Drop this line when a newer authentik digest includes that fix.
+CVE-2026-63374
