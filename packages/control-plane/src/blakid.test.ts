@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ForbiddenError, TenantIsolationError } from "@blakid/authz";
 import { InvalidTransitionError } from "@blakid/identity";
 import { BlakID } from "./blakid.ts";
@@ -20,6 +20,16 @@ function system() {
 }
 
 describe("BlakID control plane vertical slice", () => {
+  beforeEach(() => {
+    // Match the fixture clock for JWT and support-grant expiry checks.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-22T05:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("provisions isolated organisations, manages lifecycle, OIDC, audit, and support access", async () => {
     const { app, runtime } = system();
     const operator = createTestPrincipal({ role: "YUMA_PLATFORM_OPERATOR", organisationId: null });
@@ -185,6 +195,8 @@ describe("BlakID control plane vertical slice", () => {
         name: "Intruder",
       }),
     ).rejects.toThrow(ForbiddenError);
+    vi.setSystemTime(new Date(started.principal.supportGrant!.expiresAt));
+    await expect(app.listUsers(started.principal, communityA.organisation.id)).rejects.toThrow(TenantIsolationError);
     const ended = await app.endSupportAccess(operator, support.id);
     expect(ended.status).toBe("ended");
 

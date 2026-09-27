@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { evaluateAssertions, type TrustPolicy } from "./index.ts";
 import { generateFederationKeypair, peekFederationIssuer, signFederationAssertion, verifyFederationAssertion } from "./assertion.ts";
 
@@ -18,6 +18,16 @@ const admin = {
 };
 
 describe("signed BlakID Federation assertions", () => {
+  beforeEach(() => {
+    // Match the fixture clock for JWT and support-grant expiry checks.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-22T05:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("signs with the issuer key and verifies for the audience", async () => {
     const key = await generateFederationKeypair("org-a", "2026-09-22T05:00:00.000Z");
     const token = await signFederationAssertion(key, {
@@ -31,6 +41,25 @@ describe("signed BlakID Federation assertions", () => {
     const payload = await verifyFederationAssertion(token, "org-b", key);
     expect(payload.sub).toBe("josh@wiradjuri.test");
     expect(payload.attributes[0]?.attribute).toBe("email");
+  });
+
+  it("rejects an assertion at its expiration time", async () => {
+    const key = await generateFederationKeypair("org-a", new Date().toISOString());
+    const token = await signFederationAssertion(key, {
+      audienceOrgId: "org-b",
+      subject: "josh@wiradjuri.test",
+      attributes: [email],
+      now: new Date(),
+    });
+
+    vi.setSystemTime(new Date("2026-09-22T05:04:59.000Z"));
+    await expect(verifyFederationAssertion(token, "org-b", key)).resolves.toMatchObject({
+      sub: "josh@wiradjuri.test",
+    });
+    vi.setSystemTime(new Date("2026-09-22T05:05:00.000Z"));
+    await expect(verifyFederationAssertion(token, "org-b", key)).rejects.toMatchObject({
+      code: "ERR_JWT_EXPIRED",
+    });
   });
 
   it("rejects a valid signature when the audience has no pairwise trust", async () => {

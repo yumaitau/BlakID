@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ForbiddenError } from "@blakid/authz";
 import { BlakID } from "./blakid.ts";
 import { MemoryStore } from "./memory-store.ts";
@@ -51,6 +51,16 @@ async function org() {
 }
 
 describe("Milestone 2-4 control plane", () => {
+  beforeEach(() => {
+    // Match the fixture clock for JWT and support-grant expiry checks.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-22T05:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("creates SAML apps with IdP metadata", async () => {
     const { app, owner, orgId } = await org();
     const saml = await app.createSamlApplication(owner, orgId, {
