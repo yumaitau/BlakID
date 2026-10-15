@@ -23,10 +23,6 @@ jobs:
       - run: node scripts/check-authentik-pin.mjs
       - run: pnpm audit --audit-level=high
       - run: pnpm dlx @cyclonedx/cyclonedx-npm --output-file sbom.cdx.json --omit dev
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sbom
-          path: sbom.cdx.json
 
   image:
     runs-on: ubuntu-latest
