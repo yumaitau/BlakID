@@ -12,7 +12,7 @@ Possessing a BlakID never proves Aboriginal or Torres Strait Islander identity. 
 
 - Next.js 16, TypeScript, App Router, Tailwind, Zod
 - Control-plane metadata: PostgreSQL + Drizzle
-- Identity engine: pinned `ghcr.io/goauthentik/server@sha256:ab9b4e8cc4ab3f8d1198d2db6aeea66bafea1963b3f2843589e0d163f97d9849` (tag 2026.8.3)
+- Identity engine: pinned `ghcr.io/goauthentik/server@sha256:602227a86455d6772e3d16b7d852713c4f864f40df5df894abd1285bb53979a5` (tag 2026.8.5)
 - Dedicated authentik + PostgreSQL per organisation
 - Default region: AWS `ap-southeast-2` (Australia — Sydney)
 
