@@ -24,7 +24,7 @@ describe("tenant files", () => {
     });
     const env = readFileSync(join(root, "community-a", ".env"), "utf8");
     expect(env).toContain("COMPOSE_PORT_HTTP=9100");
-    expect(env).toContain("ghcr.io/goauthentik/server@sha256:e7226ae116dac5aa0a5643803e735b010038f492c401e08e16b3bf1ac54c090c");
+    expect(env).toContain("ghcr.io/goauthentik/server@sha256:602227a86455d6772e3d16b7d852713c4f864f40df5df894abd1285bb53979a5");
     expect(env).toContain("BACKUP_REGION=ap-southeast-2");
     expect(env).toContain("BLAKID_SUBNET=10.201.");
     expect(env).toContain("BLAKID_BLUEPRINTS_DIR=./blueprints");

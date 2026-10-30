@@ -24,7 +24,7 @@ does not fail the high-severity gate.
 
 ## Authentik image verification
 
-The 2026.8.4 multi-architecture index digest was obtained from GHCR's manifest
+The 2026.8.5 multi-architecture index digest was obtained from GHCR's manifest
 endpoint and is shared by the config and tenant Compose file. Trivy 0.76.0
 on linux/amd64 found PyJWT 2.15.1 and anyio 4.14.2 in this image, so the old
 anyio exception was removed from `.trivyignore`. CVE-2026-102268 is absent.
