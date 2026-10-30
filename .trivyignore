@@ -1,1 +1,5 @@
-# No image vulnerability exceptions.
+# Image vulnerability exceptions. Each entry must be time-boxed (exp:) and justified.
+# libbrotli1 CVE-2026-111497 (Brotli decoder OOB write): fixed in Debian 1.1.0-2+deb13u1, but
+# no goauthentik/server tag newer than 2026.8.5 exists yet to pick it up (checked 2026-10-30).
+# Remove this entry and bump the pin in packages/config as soon as upstream publishes a rebuilt image.
+CVE-2026-111497 exp:2026-11-13
