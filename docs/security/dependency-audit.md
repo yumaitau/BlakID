@@ -24,9 +24,9 @@ does not fail the high-severity gate.
 
 ## Authentik image verification
 
-The 2026.8.5 multi-architecture index digest was obtained from GHCR's manifest
-endpoint and is shared by the config and tenant Compose file. Trivy 0.76.0
-on linux/amd64 found PyJWT 2.15.1 and anyio 4.14.2 in this image, so the old
-anyio exception was removed from `.trivyignore`. CVE-2026-102268 is absent.
-The CI-equivalent CRITICAL scan with `--ignore-unfixed` passes; an unfixed
-libxml2 CVE remains excluded by that existing gate policy.
+The 2026.8.7 multi-architecture index digest was obtained from GHCR's manifest
+endpoint and is shared by the config and tenant Compose file. The linux/amd64
+image's dpkg status has no libbrotli1 package, and the image filesystem has no
+brotli files. Trivy 0.76.2 does not report CVE-2026-111497. The CI-equivalent
+CRITICAL scan with `--ignore-unfixed` passes; an unfixed libxml2 CVE remains
+excluded by that existing gate policy.

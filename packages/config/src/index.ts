@@ -1,8 +1,8 @@
 /** Single pin for upstream authentik. Never float a latest tag in production. */
-export const AUTHENTIK_VERSION = "2026.8.5";
-/** Multi-arch index digest for ghcr.io/goauthentik/server:2026.8.5. */
+export const AUTHENTIK_VERSION = "2026.8.7";
+/** Multi-arch index digest for ghcr.io/goauthentik/server:2026.8.7. */
 export const AUTHENTIK_IMAGE_DIGEST =
-  "sha256:602227a86455d6772e3d16b7d852713c4f864f40df5df894abd1285bb53979a5";
+  "sha256:1675a017c46ba7f4f15333aeafeeb64538c581673bcbcd36af872cdf7de4e7f7";
 export const AUTHENTIK_IMAGE = `ghcr.io/goauthentik/server@${AUTHENTIK_IMAGE_DIGEST}`;
 export const POSTGRES_IMAGE = "postgres:16-alpine";
 export const REDIS_IMAGE = "redis:7-alpine";
